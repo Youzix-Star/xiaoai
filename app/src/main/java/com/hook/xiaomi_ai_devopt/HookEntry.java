@@ -60,6 +60,9 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static final String CLS_OSBOT_DEV_STATE = "com.aios.osbot.ui.settings.q8";
     /** osbot 设置 DataStore（CoreSettingsDataStore，混淆名 qk.m0） */
     private static final String CLS_OSBOT_STORE = "qk.m0";
+    /** osbot 语音/提示词 DataStore（VoiceSettingsDataStore，混淆名 vu.q）
+     *  持有 voice_system_prompt / voice_custom_system_prompt */
+    private static final String CLS_OSBOT_PROMPT_STORE = "vu.q";
 
     private static final XC_MethodReplacement RETURN_TRUE =
             XC_MethodReplacement.returnConstant(Boolean.TRUE);
@@ -78,6 +81,7 @@ public class HookEntry implements IXposedHookLoadPackage {
         // ---- B. osbot（MiClaw / 智能体）开发者状态 + 第三方 API 配置 ----
         hookOsbotDevState(lp);
         hookOsbotSettingsStore(lp);
+        hookOsbotPromptStore(lp);
 
         // 诊断：确认开发者界面的 onCreate / setContentView 是否真的执行了
         hookDevOptionsActivity(lp);
@@ -216,13 +220,43 @@ public class HookEntry implements IXposedHookLoadPackage {
                     if (app != null) {
                         LlmConfig.load(app);
                     }
-                    LlmConfig.apply(param.thisObject, clazz.getClassLoader());
+                    LlmConfig.applyStore(param.thisObject, clazz.getClassLoader());
                 } catch (Throwable t) {
                     XposedBridge.log(TAG + " | [conf] 应用失败: " + t);
                 }
             }
         });
         XposedBridge.log(TAG + " | ✓ hook " + CLS_OSBOT_STORE + " 构造（用于写入 LLM 配置）");
+    }
+
+    /**
+     * VoiceSettingsDataStore（vu.q）构造时拿到实例，写入系统提示词：
+     *   setVoiceSystemPrompt(String, Continuation)        → voice_system_prompt
+     *   setVoiceCustomSystemPrompt(String, Continuation)  → voice_custom_system_prompt
+     */
+    private void hookOsbotPromptStore(XC_LoadPackage.LoadPackageParam lp) {
+        final Class<?> clazz = findClassOrNull(CLS_OSBOT_PROMPT_STORE, lp.classLoader);
+        if (clazz == null) {
+            XposedBridge.log(TAG + " | ✗ 未找到 " + CLS_OSBOT_PROMPT_STORE
+                    + "（无法写入系统提示词）");
+            return;
+        }
+        XposedBridge.hookAllConstructors(clazz, new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) {
+                try {
+                    Application app = currentApplication();
+                    if (app != null) {
+                        LlmConfig.load(app);
+                    }
+                    LlmConfig.applyPromptStore(param.thisObject, clazz.getClassLoader());
+                } catch (Throwable t) {
+                    XposedBridge.log(TAG + " | [conf] 写入提示词失败: " + t);
+                }
+            }
+        });
+        XposedBridge.log(TAG + " | ✓ hook " + CLS_OSBOT_PROMPT_STORE
+                + " 构造（用于写入系统提示词）");
     }
 
     // ==================== 诊断 ====================

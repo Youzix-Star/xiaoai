@@ -34,8 +34,11 @@ LSPosed 模块。针对 **超级小爱 8.2.10.2222（`com.miui.voiceassist`）**
 | LLM 设置界面 | `com.aios.osbot.store.debug.DevOptionsScreen`（Compose） |
 | 实验室界面 | `com.aios.osbot.ui.settings.LabScreen` |
 | 配置存储 | `qk.m0` = `CoreSettingsDataStore`：`llm_provider` / `api_key` / `model_name` / `openai_base_url` / `temperature` / `anthropic_base_url` |
+| **系统提示词存储** | `vu.q` = `VoiceSettingsDataStore`：`voice_system_prompt` / `voice_custom_system_prompt`（`setVoiceSystemPrompt` / `setVoiceCustomSystemPrompt`，同为 suspend setter） |
+| 提示词文件覆盖开关 | `qk.m0.setPromptFileOverrideEnabled`，键 `prompt_file_override_enabled` |
+| Agent 提示词 | `assets/agents/<agent-id>/prompt.md`（对应 `AgentDefinition.promptFile` 字段 `prompt_file`） |
 
-## 模块做了三件事
+## 模块做了四件事
 
 1. **放行小米门禁**：`ca1.a.isEnabled()` → true、`g1.isLogin()` → true，并让 `clear()` 变空操作。
 2. **状态一致**：hook `com.xiaomi.voiceassist.baselibrary.utils.g1.getBoolean()`，对
@@ -43,7 +46,10 @@ LSPosed 模块。针对 **超级小爱 8.2.10.2222（`com.miui.voiceassist`）**
 3. **放行 osbot 开发者状态**：`DevOptionState.getUnlocked()` → true、
    `setUnlocked(false)` → 强制 true，让智能体/MiClaw 里的开发者入口出现。
 
-另外还会把下面这个配置文件里的第三方 API 参数**写进 osbot DataStore**。
+4. **写入系统提示词**：把配置里的提示词通过 `VoiceSettingsDataStore.setVoiceSystemPrompt()` /
+   `setVoiceCustomSystemPrompt()` 写进小爱的提示词存储，并可开启 Agent 提示词文件覆盖。
+
+以上写入都发生在 osbot 两个 DataStore 构造完成时（通过 hook 构造函数拿到实例）。
 
 ## 配置第三方 API
 
@@ -82,6 +88,38 @@ model_name=deepseek-chat
 
 写入动作通过 Kotlin suspend setter 完成（模块用动态代理构造 `Continuation`，
 因此不依赖 kotlin 运行时）。
+
+## 改系统提示词
+
+这版本系统提示词存在 `VoiceSettingsDataStore`（混淆名 `vu.q`）里，键是
+`voice_system_prompt` 和 `voice_custom_system_prompt`，模块直接用它的 suspend setter 写入，
+不需要动 App 界面。
+
+在同一个 `xiaoai_llm.conf` 里加：
+
+```ini
+# 主系统提示词（支持 \n 换行）
+system_prompt=你是我的私人助理。回答前先给结论，语气简短直接。\n不知道就说不知道。
+
+# 提示词太长就写到文件里，相对路径按配置文件所在目录解析
+system_prompt_file=my_prompt.txt
+
+# 自定义系统提示词（voice_custom_system_prompt）
+custom_system_prompt=
+
+# 按文件覆盖 Agent 提示词（assets/agents/<id>/prompt.md）
+prompt_override=true
+```
+
+改完照样要 `su -c "am force-stop com.miui.voiceassist"` 再打开。
+
+说明：
+
+- `system_prompt` 写的是**语音/对话主链路**的系统提示词；`custom_system_prompt` 是它的自定义覆盖项，
+  两者都在同一存储里，按需二选一或都写。
+- `prompt_override` 对应 App 自己的开关 `prompt_file_override_enabled`，开启后 Agent 的提示词
+  以文件为准（Agent 定义里 `prompt_file` 指向的 `prompt.md`）。
+- 想要多行提示词，除了 `\n` 和 `*_file`，也可以直接把换行写进文件里再用 `*_file` 引用。
 
 ## 环境要求
 
@@ -132,8 +170,10 @@ AiDevOpt | ✓ hook ca1.a.isEnabled() → true
 AiDevOpt | ✓ hook com.xiaomi.voiceassistant.g1.isLogin() → true
 AiDevOpt | ✓ hook DevOptionState.getUnlocked() → true
 AiDevOpt | ✓ hook qk.m0 构造（用于写入 LLM 配置）
+AiDevOpt | ✓ hook vu.q 构造（用于写入系统提示词）
 AiDevOpt | [conf] 已生成配置模板: /data/data/com.miui.voiceassist/files/xiaoai_llm.conf
 AiDevOpt | [conf] 已写入 api_key = sk-1***ab
+AiDevOpt | [conf] 已写入 system_prompt = 你是我的私人助理。回答前先给结论…(48 字符)
 AiDevOpt | → DeveloperOptionsActivity.onCreate 进入（门禁已被放行）
 AiDevOpt | ✓ setContentView(2131558469) 执行 —— 页面正常渲染
 ```
@@ -162,7 +202,9 @@ AiDevOpt | ✓ setContentView(2131558469) 执行 —— 页面正常渲染
   `LabScreen`），本模块解锁的是它的状态开关（`DevOptionState`）。未在其宿主界面里
   找到稳定入口，因此额外提供配置文件写入的方式，保证参数能真正落到 DataStore。
 - **只验证到「可编译 + 配置可解析」**：真机行为需要以日志为准，仓库内没有 App 样本。
-- `provider_id` 等可选字段按需填写，留空则不写入。
+- `provider_id` 等可选字段按需填写，留空则不写入；提示词同理，留空即保持 App 原值。
+- **提示词的生效范围**：`voice_system_prompt` 作用于语音对话主链路；各 Agent（`assets/agents/*`）
+  还有自己的 `prompt.md`，需要配 `prompt_override` 才会被文件覆盖。
 
 ## 卸载
 
