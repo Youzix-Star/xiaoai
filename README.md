@@ -185,23 +185,55 @@ Xposed API（`de.robv.android.xposed:api:82`）不在 Maven Central，官方仓�
 4. 「关于」页面 → 应出现「开发者选项」入口
 5. 配置第三方 API：见上节 `xiaoai_llm.conf`
 
-## 调试日志
+## 调试日志在哪看
+
+三个地方随便挑，内容一样：
+
+**1. 悬浮窗里直接看（最省事，不用 adb / 不用开 Termux）**
+
+点悬浮球 → 面板右上角 **日志** → 显示最近 500 行；**刷新** 按钮重新拉取。
+日志窗口还会显示日志文件路径。
+
+**2. LSPosed 管理器 → 日志**
+
+按模块名过滤即可，手机上就能看。
+
+**3. Termux / 电脑上的 logcat**
 
 ```bash
+# 本机（有 root，在 Termux 里）
+su -c "/system/bin/logcat -v time" | grep AiDevOpt
+
+# 只看模块相关 tag
+su -c "/system/bin/logcat -s LSPosed-Bridge:I" | grep AiDevOpt
+
+# 电脑上
 adb logcat | grep AiDevOpt
 ```
 
-关键行：
+**4. 日志文件（可以直接 cat / 发给我）**
 
 ```
+/data/data/com.miui.voiceassist/files/AiDevOpt.log
+```
+
+```bash
+su -c "cat /data/data/com.miui.voiceassist/files/AiDevOpt.log"
+```
+
+上限 256KB，超出自动滚动；内存里同时保留最近 500 行供悬浮窗展示。
+
+### 关键日志
+
+```
+AiDevOpt | ======== 注入 com.miui.voiceassist ========
 AiDevOpt | ✓ hook ca1.a.isEnabled() → true
 AiDevOpt | ✓ hook com.xiaomi.voiceassistant.g1.isLogin() → true
 AiDevOpt | ✓ hook DevOptionState.getUnlocked() → true
 AiDevOpt | ✓ hook qk.m0 构造（用于写入 LLM 配置）
 AiDevOpt | ✓ hook vu.q 构造（用于写入系统提示词）
+AiDevOpt | ✓ 已注册配置悬浮窗
 AiDevOpt | ✓ 配置悬浮球已显示（长按可隐藏）
-AiDevOpt | 配置面板已打开
-AiDevOpt | ✓ 悬浮窗保存配置完成
 AiDevOpt | [conf] 已生成配置模板: /data/data/com.miui.voiceassist/files/xiaoai_llm.conf
 AiDevOpt | [conf] 已写入 api_key = sk-1***ab
 AiDevOpt | [conf] 已写入 system_prompt = 你是我的私人助理。回答前先给结论…(48 字符)
@@ -209,7 +241,7 @@ AiDevOpt | → DeveloperOptionsActivity.onCreate 进入（门禁已被放行）
 AiDevOpt | ✓ setContentView(2131558469) 执行 —— 页面正常渲染
 ```
 
-看到 `✗ 未找到 …` 说明该 App 版本的混淆名变了，需要重新确认符号（见下）。
+看到 `✗ 未找到 …` 说明该 App 版本的混淆名变了，那一行会指出是哪一类符号失效。
 
 ## 修复记录
 

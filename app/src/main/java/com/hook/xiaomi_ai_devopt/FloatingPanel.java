@@ -51,6 +51,7 @@ final class FloatingPanel {
     private static View sButton;
     private static WindowManager.LayoutParams sButtonParams;
     private static View sPanel;
+    private static View sLogView;
     private static boolean sButtonShown;
 
     private static final Map<String, EditText> FIELDS = new LinkedHashMap<String, EditText>();
@@ -142,15 +143,16 @@ final class FloatingPanel {
             sWm.addView(ball, sButtonParams);
             sButton = ball;
             sButtonShown = true;
-            XposedBridge.log(TAG + " | ✓ 配置悬浮球已显示（长按可隐藏）");
+            Diag.log("✓ 配置悬浮球已显示（长按可隐藏）");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " | ✗ 悬浮球显示失败: " + t);
+            Diag.log("✗ 悬浮球显示失败: " + t);
         }
     }
 
     static void hideButton() {
         if (!sButtonShown || sWm == null || sButton == null) return;
         try {
+            closeLogView();
             closePanel();
             sWm.removeView(sButton);
         } catch (Throwable ignored) {
@@ -257,11 +259,110 @@ final class FloatingPanel {
 
             sWm.addView(root, lp);
             sPanel = root;
-            XposedBridge.log(TAG + " | 配置面板已打开");
+            Diag.log("配置面板已打开");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " | ✗ 配置面板打开失败: " + t);
+            Diag.log("✗ 配置面板打开失败: " + t);
             sPanel = null;
         }
+    }
+
+    /** 面板内直接看模块日志，不用装 adb / 开 Termux */
+    private static void toggleLogView() {
+        if (sLogView != null) {
+            closeLogView();
+            return;
+        }
+        final Context ctx = sCtx;
+        try {
+            if (sWm == null || ctx == null) return;
+
+            LinearLayout root = new LinearLayout(ctx);
+            root.setOrientation(LinearLayout.VERTICAL);
+            root.setBackground(rounded(dp(ctx, 16), CARD_BG, dp(ctx, 1), CARD_STROKE));
+            int pad = dp(ctx, 14);
+            root.setPadding(pad, pad, pad, pad);
+
+            TextView title = new TextView(ctx);
+            title.setText("模块日志");
+            title.setTextColor(TEXT);
+            title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+            title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
+            root.addView(title);
+
+            TextView path = new TextView(ctx);
+            path.setText(Diag.filePath());
+            path.setTextColor(TEXT_DIM);
+            path.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9);
+            root.addView(path);
+
+            ScrollView scroll = new ScrollView(ctx);
+            final TextView body = new TextView(ctx);
+            body.setText(Diag.snapshot());
+            body.setTextColor(0xFFB9F6CA);
+            body.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
+            body.setTypeface(android.graphics.Typeface.MONOSPACE);
+            body.setTextIsSelectable(true);
+            int p2 = dp(ctx, 8);
+            body.setPadding(p2, p2, p2, p2);
+            scroll.addView(body, new ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            android.util.DisplayMetrics dm = ctx.getResources().getDisplayMetrics();
+            int w = Math.min(dp(ctx, 340), (int) (dm.widthPixels * 0.92f));
+            int h = Math.min(dp(ctx, 420), (int) (dm.heightPixels * 0.7f));
+            root.addView(scroll, new LinearLayout.LayoutParams(w, h));
+
+            LinearLayout actions = new LinearLayout(ctx);
+            actions.setOrientation(LinearLayout.HORIZONTAL);
+            actions.setGravity(Gravity.END);
+            LinearLayout.LayoutParams actionsLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            actionsLp.topMargin = dp(ctx, 10);
+            root.addView(actions, actionsLp);
+
+            actions.addView(button(ctx, "刷新", 0x22FFFFFF, TEXT, new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    body.setText(Diag.snapshot());
+                    scroll.fullScroll(View.FOCUS_DOWN);
+                }
+            }), weightLp(ctx));
+            actions.addView(button(ctx, "返回", ACCENT, TEXT, new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    closeLogView();
+                }
+            }), weightLp(ctx));
+
+            WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    TYPE_APPLICATION_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                            | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+                    PixelFormat.TRANSLUCENT);
+            lp.gravity = Gravity.CENTER;
+            sWm.addView(root, lp);
+            sLogView = root;
+            scroll.post(new Runnable() {
+                @Override
+                public void run() {
+                    scroll.fullScroll(View.FOCUS_DOWN);
+                }
+            });
+        } catch (Throwable t) {
+            sLogView = null;
+            Diag.log("✗ 日志窗口打开失败: " + t);
+        }
+    }
+
+    private static void closeLogView() {
+        if (sLogView == null || sWm == null) return;
+        try {
+            sWm.removeView(sLogView);
+        } catch (Throwable ignored) {
+        }
+        sLogView = null;
     }
 
     private static void closePanel() {
@@ -285,10 +386,10 @@ final class FloatingPanel {
                     ? "true" : "false");
             LlmConfig.saveFrom(sCtx, updates);
             toast(sCtx, "已保存并生效");
-            XposedBridge.log(TAG + " | ✓ 悬浮窗保存配置完成");
+            Diag.log("✓ 悬浮窗保存配置完成");
             closePanel();
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " | ✗ 保存失败: " + t);
+            Diag.log("✗ 保存失败: " + t);
             toast(sCtx, "保存失败：" + t.getMessage());
         }
     }
@@ -308,6 +409,20 @@ final class FloatingPanel {
         LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
         bar.addView(title, titleLp);
+
+        TextView log = new TextView(ctx);
+        log.setText("日志");
+        log.setTextColor(ACCENT);
+        log.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        log.setGravity(Gravity.CENTER);
+        log.setPadding(dp(ctx, 10), dp(ctx, 4), dp(ctx, 10), dp(ctx, 4));
+        log.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                toggleLogView();
+            }
+        });
+        bar.addView(log);
 
         TextView close = new TextView(ctx);
         close.setText("✕");

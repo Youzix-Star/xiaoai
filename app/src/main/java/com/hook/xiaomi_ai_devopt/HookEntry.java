@@ -71,7 +71,7 @@ public class HookEntry implements IXposedHookLoadPackage {
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lp) {
         if (!TARGET_PKG.equals(lp.packageName)) return;
 
-        XposedBridge.log(TAG + " | ======== 注入 " + lp.packageName + " ========");
+        Diag.log("======== 注入 " + lp.packageName + " ========");
 
         // ---- A. 小米开发者选项门禁 ----
         hookDevSwitch(lp);
@@ -91,7 +91,7 @@ public class HookEntry implements IXposedHookLoadPackage {
             hookFloatingPanel(lp);
         }
 
-        XposedBridge.log(TAG + " | ======== Hook 完成 ========");
+        Diag.log("======== Hook 完成 ========");
     }
 
     // ==================== A. 小米门禁 ====================
@@ -100,22 +100,22 @@ public class HookEntry implements IXposedHookLoadPackage {
     private void hookDevSwitch(XC_LoadPackage.LoadPackageParam lp) {
         Class<?> clazz = findClassOrNull(CLS_DEV_SWITCH, lp.classLoader);
         if (clazz == null) {
-            XposedBridge.log(TAG + " | ✗ 未找到 " + CLS_DEV_SWITCH + "（App 版本可能变了）");
+            Diag.log("✗ 未找到 " + CLS_DEV_SWITCH + "（App 版本可能变了）");
             return;
         }
 
         Method isEnabled = findMethod(clazz, "isEnabled", boolean.class, 0, false);
         if (isEnabled != null) {
             XposedBridge.hookMethod(isEnabled, RETURN_TRUE);
-            XposedBridge.log(TAG + " | ✓ hook " + CLS_DEV_SWITCH + ".isEnabled() → true");
+            Diag.log("✓ hook " + CLS_DEV_SWITCH + ".isEnabled() → true");
         } else {
-            XposedBridge.log(TAG + " | ✗ " + CLS_DEV_SWITCH + " 缺少 isEnabled()");
+            Diag.log("✗ " + CLS_DEV_SWITCH + " 缺少 isEnabled()");
         }
 
         Method clear = findMethod(clazz, "clear", void.class, 0, false);
         if (clear != null) {
             XposedBridge.hookMethod(clear, XC_MethodReplacement.DO_NOTHING);
-            XposedBridge.log(TAG + " | ✓ hook " + CLS_DEV_SWITCH + ".clear() → 空操作");
+            Diag.log("✓ hook " + CLS_DEV_SWITCH + ".clear() → 空操作");
         }
     }
 
@@ -123,7 +123,7 @@ public class HookEntry implements IXposedHookLoadPackage {
     private void hookLoginGate(XC_LoadPackage.LoadPackageParam lp) {
         Class<?> clazz = findClassOrNull(CLS_LOGIN, lp.classLoader);
         if (clazz == null) {
-            XposedBridge.log(TAG + " | ✗ 未找到 " + CLS_LOGIN);
+            Diag.log("✗ 未找到 " + CLS_LOGIN);
             return;
         }
         Method isLogin = findMethod(clazz, "isLogin", boolean.class, 0, true);
@@ -132,9 +132,9 @@ public class HookEntry implements IXposedHookLoadPackage {
         }
         if (isLogin != null) {
             XposedBridge.hookMethod(isLogin, RETURN_TRUE);
-            XposedBridge.log(TAG + " | ✓ hook " + CLS_LOGIN + ".isLogin() → true");
+            Diag.log("✓ hook " + CLS_LOGIN + ".isLogin() → true");
         } else {
-            XposedBridge.log(TAG + " | ✗ " + CLS_LOGIN + " 缺少 isLogin()");
+            Diag.log("✗ " + CLS_LOGIN + " 缺少 isLogin()");
         }
     }
 
@@ -145,7 +145,7 @@ public class HookEntry implements IXposedHookLoadPackage {
     private void hookPrefsReader(XC_LoadPackage.LoadPackageParam lp) {
         Class<?> clazz = findClassOrNull(CLS_PREFS, lp.classLoader);
         if (clazz == null) {
-            XposedBridge.log(TAG + " | ✗ 未找到 " + CLS_PREFS);
+            Diag.log("✗ 未找到 " + CLS_PREFS);
             return;
         }
         Method getBoolean = null;
@@ -160,7 +160,7 @@ public class HookEntry implements IXposedHookLoadPackage {
             }
         }
         if (getBoolean == null) {
-            XposedBridge.log(TAG + " | ✗ " + CLS_PREFS + " 缺少 getBoolean(String, boolean)");
+            Diag.log("✗ " + CLS_PREFS + " 缺少 getBoolean(String, boolean)");
             return;
         }
         XposedBridge.hookMethod(getBoolean, new XC_MethodHook() {
@@ -168,11 +168,11 @@ public class HookEntry implements IXposedHookLoadPackage {
             protected void beforeHookedMethod(MethodHookParam param) {
                 if (KEY_DEV_ENABLED.equals(param.args[0])) {
                     param.setResult(Boolean.TRUE);
-                    XposedBridge.log(TAG + " | ✓ prefs.getBoolean(" + KEY_DEV_ENABLED + ") → true");
+                    Diag.log("✓ prefs.getBoolean(" + KEY_DEV_ENABLED + ") → true");
                 }
             }
         });
-        XposedBridge.log(TAG + " | ✓ hook " + CLS_PREFS + ".getBoolean(..)");
+        Diag.log("✓ hook " + CLS_PREFS + ".getBoolean(..)");
     }
 
     // ==================== B. osbot 开发者状态 ====================
@@ -185,7 +185,7 @@ public class HookEntry implements IXposedHookLoadPackage {
     private void hookOsbotDevState(XC_LoadPackage.LoadPackageParam lp) {
         Class<?> clazz = findClassOrNull(CLS_OSBOT_DEV_STATE, lp.classLoader);
         if (clazz == null) {
-            XposedBridge.log(TAG + " | ✗ 未找到 " + CLS_OSBOT_DEV_STATE
+            Diag.log("✗ 未找到 " + CLS_OSBOT_DEV_STATE
                     + "（osbot 混淆名可能变了，智能体里的开发者入口无法解锁）");
             return;
         }
@@ -193,7 +193,7 @@ public class HookEntry implements IXposedHookLoadPackage {
         Method getUnlocked = findMethod(clazz, "getUnlocked", boolean.class, 0, false);
         if (getUnlocked != null) {
             XposedBridge.hookMethod(getUnlocked, RETURN_TRUE);
-            XposedBridge.log(TAG + " | ✓ hook DevOptionState.getUnlocked() → true");
+            Diag.log("✓ hook DevOptionState.getUnlocked() → true");
         }
         Method setUnlocked = findMethod(clazz, "setUnlocked", void.class, 1, false);
         if (setUnlocked != null) {
@@ -203,7 +203,7 @@ public class HookEntry implements IXposedHookLoadPackage {
                     param.args[0] = Boolean.TRUE;
                 }
             });
-            XposedBridge.log(TAG + " | ✓ hook DevOptionState.setUnlocked(false) → 强制 true");
+            Diag.log("✓ hook DevOptionState.setUnlocked(false) → 强制 true");
         }
     }
 
@@ -214,7 +214,7 @@ public class HookEntry implements IXposedHookLoadPackage {
     private void hookOsbotSettingsStore(XC_LoadPackage.LoadPackageParam lp) {
         final Class<?> clazz = findClassOrNull(CLS_OSBOT_STORE, lp.classLoader);
         if (clazz == null) {
-            XposedBridge.log(TAG + " | ✗ 未找到 " + CLS_OSBOT_STORE + "（无法写入第三方 API 配置）");
+            Diag.log("✗ 未找到 " + CLS_OSBOT_STORE + "（无法写入第三方 API 配置）");
             return;
         }
         XposedBridge.hookAllConstructors(clazz, new XC_MethodHook() {
@@ -223,15 +223,16 @@ public class HookEntry implements IXposedHookLoadPackage {
                 try {
                     Application app = currentApplication();
                     if (app != null) {
+                        Diag.init(app);
                         LlmConfig.load(app);
                     }
                     LlmConfig.rememberStore(param.thisObject, clazz.getClassLoader());
                 } catch (Throwable t) {
-                    XposedBridge.log(TAG + " | [conf] 应用失败: " + t);
+                    Diag.log("[conf] 应用失败: " + t);
                 }
             }
         });
-        XposedBridge.log(TAG + " | ✓ hook " + CLS_OSBOT_STORE + " 构造（用于写入 LLM 配置）");
+        Diag.log("✓ hook " + CLS_OSBOT_STORE + " 构造（用于写入 LLM 配置）");
     }
 
     /**
@@ -242,7 +243,7 @@ public class HookEntry implements IXposedHookLoadPackage {
     private void hookOsbotPromptStore(XC_LoadPackage.LoadPackageParam lp) {
         final Class<?> clazz = findClassOrNull(CLS_OSBOT_PROMPT_STORE, lp.classLoader);
         if (clazz == null) {
-            XposedBridge.log(TAG + " | ✗ 未找到 " + CLS_OSBOT_PROMPT_STORE
+            Diag.log("✗ 未找到 " + CLS_OSBOT_PROMPT_STORE
                     + "（无法写入系统提示词）");
             return;
         }
@@ -252,15 +253,16 @@ public class HookEntry implements IXposedHookLoadPackage {
                 try {
                     Application app = currentApplication();
                     if (app != null) {
+                        Diag.init(app);
                         LlmConfig.load(app);
                     }
                     LlmConfig.rememberPromptStore(param.thisObject, clazz.getClassLoader());
                 } catch (Throwable t) {
-                    XposedBridge.log(TAG + " | [conf] 写入提示词失败: " + t);
+                    Diag.log("[conf] 写入提示词失败: " + t);
                 }
             }
         });
-        XposedBridge.log(TAG + " | ✓ hook " + CLS_OSBOT_PROMPT_STORE
+        Diag.log("✓ hook " + CLS_OSBOT_PROMPT_STORE
                 + " 构造（用于写入系统提示词）");
     }
 
@@ -277,21 +279,21 @@ public class HookEntry implements IXposedHookLoadPackage {
                         protected void afterHookedMethod(MethodHookParam param) {
                             try {
                                 Application app = (Application) param.thisObject;
+                                Diag.init(app);
                                 LlmConfig.load(app);
                                 if (LlmConfig.floatingEnabled()) {
                                     FloatingPanel.show(app);
                                 } else {
-                                    XposedBridge.log(TAG
-                                            + " | 悬浮窗已按配置关闭（floating_button=false）");
+                                    Diag.log("悬浮窗已按配置关闭（floating_button=false）");
                                 }
                             } catch (Throwable t) {
-                                XposedBridge.log(TAG + " | 悬浮窗初始化失败: " + t);
+                                Diag.log("悬浮窗初始化失败: " + t);
                             }
                         }
                     });
-            XposedBridge.log(TAG + " | ✓ 已注册配置悬浮窗");
+            Diag.log("✓ 已注册配置悬浮窗");
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " | ✗ 悬浮窗注册失败: " + t);
+            Diag.log("✗ 悬浮窗注册失败: " + t);
         }
     }
 
@@ -300,19 +302,19 @@ public class HookEntry implements IXposedHookLoadPackage {
     private void hookDevOptionsActivity(XC_LoadPackage.LoadPackageParam lp) {
         Class<?> clazz = findClassOrNull(CLS_DEV_ACTIVITY, lp.classLoader);
         if (clazz == null) {
-            XposedBridge.log(TAG + " | ✗ 未找到 " + CLS_DEV_ACTIVITY);
+            Diag.log("✗ 未找到 " + CLS_DEV_ACTIVITY);
             return;
         }
         XposedHelpers.findAndHookMethod(clazz, "onCreate", Bundle.class, new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) {
-                XposedBridge.log(TAG + " | → DeveloperOptionsActivity.onCreate 进入（门禁已被放行）");
+                Diag.log("→ DeveloperOptionsActivity.onCreate 进入（门禁已被放行）");
             }
         });
         XposedHelpers.findAndHookMethod(clazz, "setContentView", int.class, new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) {
-                XposedBridge.log(TAG + " | ✓ setContentView(" + param.args[0] + ") 执行 —— 页面正常渲染");
+                Diag.log("✓ setContentView(" + param.args[0] + ") 执行 —— 页面正常渲染");
             }
         });
     }

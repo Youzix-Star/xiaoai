@@ -67,15 +67,15 @@ final class LlmConfig {
         sDir = file.getParentFile();
         if (!file.exists()) {
             writeTemplate(file);
-            XposedBridge.log(TAG + " | [conf] 已生成配置模板: " + file.getAbsolutePath());
+            Diag.log("[conf] 已生成配置模板: " + file.getAbsolutePath());
             return;
         }
         try {
             parse(readFile(file));
-            XposedBridge.log(TAG + " | [conf] 读取 " + file.getAbsolutePath()
+            Diag.log("[conf] 读取 " + file.getAbsolutePath()
                     + " 解析到 " + VALUES.size() + " 项: " + VALUES.keySet());
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " | [conf] 解析失败: " + t);
+            Diag.log("[conf] 解析失败: " + t);
         }
     }
 
@@ -127,10 +127,10 @@ final class LlmConfig {
                 }
                 String content = readFile(f);
                 VALUES.put(key, content);
-                XposedBridge.log(TAG + " | [conf] " + key + " 取自文件 " + f.getAbsolutePath()
+                Diag.log("[conf] " + key + " 取自文件 " + f.getAbsolutePath()
                         + "（" + content.length() + " 字符）");
             } catch (Throwable t) {
-                XposedBridge.log(TAG + " | [conf] 读取 " + key + "_file 失败: " + t);
+                Diag.log("[conf] 读取 " + key + "_file 失败: " + t);
             }
         }
     }
@@ -173,7 +173,7 @@ final class LlmConfig {
             out.write(template.getBytes(UTF8));
             out.flush();
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " | [conf] 写模板失败: " + t);
+            Diag.log("[conf] 写模板失败: " + t);
         } finally {
             if (out != null) {
                 try {
@@ -221,14 +221,14 @@ final class LlmConfig {
             applyString(sStore, "setAnthropicBaseUrl", "anthropic_base_url", cont);
             applyBoolean(sStore, "setPromptFileOverrideEnabled", "prompt_override", cont);
         } else {
-            XposedBridge.log(TAG + " | [conf] CoreSettingsDataStore 尚未就绪，配置待写入");
+            Diag.log("[conf] CoreSettingsDataStore 尚未就绪，配置待写入");
         }
 
         if (sPromptStore != null) {
             applyString(sPromptStore, "setVoiceSystemPrompt", "system_prompt", cont);
             applyString(sPromptStore, "setVoiceCustomSystemPrompt", "custom_system_prompt", cont);
         } else if (VALUES.containsKey("system_prompt") || VALUES.containsKey("custom_system_prompt")) {
-            XposedBridge.log(TAG + " | [conf] VoiceSettingsDataStore 尚未就绪，提示词待写入");
+            Diag.log("[conf] VoiceSettingsDataStore 尚未就绪，提示词待写入");
         }
     }
 
@@ -299,9 +299,9 @@ final class LlmConfig {
             out = new FileOutputStream(file);
             out.write(sb.toString().getBytes(UTF8));
             out.flush();
-            XposedBridge.log(TAG + " | [conf] 已保存到 " + file.getAbsolutePath());
+            Diag.log("[conf] 已保存到 " + file.getAbsolutePath());
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " | [conf] 保存失败: " + t);
+            Diag.log("[conf] 保存失败: " + t);
         } finally {
             if (out != null) {
                 try {
@@ -327,15 +327,15 @@ final class LlmConfig {
         try {
             Method target = findSetter(store, setter, String.class);
             if (target == null) {
-                XposedBridge.log(TAG + " | [conf] 未找到 setter: " + setter);
+                Diag.log("[conf] 未找到 setter: " + setter);
                 return;
             }
             target.invoke(store, value, cont);
             String shown = key.contains("key") ? mask(value)
                     : (value.length() > 40 ? value.substring(0, 40) + "…(" + value.length() + " 字符)" : value);
-            XposedBridge.log(TAG + " | [conf] 已写入 " + key + " = " + shown);
+            Diag.log("[conf] 已写入 " + key + " = " + shown);
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " | [conf] 写入 " + key + " 失败: " + cause(t));
+            Diag.log("[conf] 写入 " + key + " 失败: " + cause(t));
         }
     }
 
@@ -346,13 +346,13 @@ final class LlmConfig {
         try {
             Method target = findSetter(store, setter, boolean.class);
             if (target == null) {
-                XposedBridge.log(TAG + " | [conf] 未找到 setter: " + setter);
+                Diag.log("[conf] 未找到 setter: " + setter);
                 return;
             }
             target.invoke(store, Boolean.valueOf(value), cont);
-            XposedBridge.log(TAG + " | [conf] 已写入 " + key + " = " + value);
+            Diag.log("[conf] 已写入 " + key + " = " + value);
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " | [conf] 写入 " + key + " 失败: " + cause(t));
+            Diag.log("[conf] 写入 " + key + " 失败: " + cause(t));
         }
     }
 
@@ -387,13 +387,13 @@ final class LlmConfig {
                         return emptyContext(iface);
                     }
                     if ("resumeWith".equals(name)) {
-                        XposedBridge.log(TAG + " | [conf] suspend 写入回调完成");
+                        Diag.log("[conf] suspend 写入回调完成");
                     }
                     return null;
                 }
             });
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " | [conf] 无法构造 Continuation: " + t);
+            Diag.log("[conf] 无法构造 Continuation: " + t);
             return null;
         }
     }
