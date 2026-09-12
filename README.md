@@ -64,6 +64,7 @@ LSPosed 模块。针对 **超级小爱 8.2.10.2222（`com.miui.voiceassist`）**
 | 拖动 | 移动悬浮球位置 |
 | 点按 | 打开配置面板 |
 | 长按 | 隐藏（本次进程内不再出现，重启小爱恢复） |
+| 面板「测 API」 | 直接用小爱进程的权限请求你配的 API，验证 key / 地址 / 模型本身是否可用 |
 
 **只在小爱处于前台时显示**：通过 `Application.registerActivityLifecycleCallbacks` 跟踪本进程
 Activity 的前后台状态 —— 小爱退到后台（或你切到别的 App）时悬浮球自动移除，回到小爱时自动出现，
@@ -301,6 +302,24 @@ AiDevOpt | ✓ setContentView(2131558469) 执行 —— 页面正常渲染
 | `→ 本地 LLM 调用` | 这条链路**确实发起了本地 LLM 调用**；如果对话后完全没有这行，说明该链路是**云端（小米服务端）**完成的 |
 | `[llm] 强制 getBaseUrl() → …` | 模块把配置出口改写成了你的值 |
 | `[http] …` | 实际访问的地址。出现 `deepseek` 才算真的走了第三方 API；出现 `miclaw` 说明还有调用在走小米云端 |
+
+## 先分清两种「不生效」
+
+面板上的 **测 API** 按钮会直接 POST `<base_url>/chat/completions`，日志里出现：
+
+```
+[test] POST https://api.deepseek.com/chat/completions model=deepseek-flash
+[test] HTTP 401 ← {"error":{"message":"Authentication Fails..."}}
+```
+
+- **`[test]` 非 200** → 你的 API 配置本身有问题（key / 模型名 / 地址），与小爱无关，先修这个
+- **`[test]` 200 但对话没走第三方** → 问题在小爱侧（见下）
+
+本地 LLM 调用的触发者（反编译确认）：`bp.b.extract` / `on.c.extract` / `xo.b.extract`（记忆提取类）、
+`qn.b.generate`（生成类）。也就是说**对话是可能触发本地 LLM 调用的**，测的时候要真说几句话，
+再看日志里有没有 `→ 本地 LLM 调用` 与 `[http] …deepseek…`。
+
+注意日志按进程分段，每段只覆盖该进程启动后的时间 —— 只截到启动阶段的话是看不到对话相关日志的。
 
 ## 修复记录
 

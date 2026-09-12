@@ -304,6 +304,12 @@ final class FloatingPanel {
                     closePanel();
                 }
             }), weightLp(ctx));
+            actions.addView(button(ctx, "测 API", 0x22FFFFFF, TEXT, new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    ApiTest.run(sCtx);
+                }
+            }), weightLp(ctx));
             actions.addView(button(ctx, "保存并生效", ACCENT, TEXT, new View.OnClickListener() {
                 @Override
                 public void onClick(View v) {
