@@ -1,22 +1,11 @@
 package com.hook.xiaomi_ai_devopt;
 
-import android.app.Activity;
 import android.app.AndroidAppHelper;
 import android.app.Application;
 import android.os.Bundle;
 
-import java.lang.reflect.Member;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Enumeration;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.WeakHashMap;
-
-import dalvik.system.DexFile;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -26,143 +15,263 @@ import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 /**
- * 小爱隐藏功能解锁模块
+ * 小爱隐藏功能解锁（针对超级小爱 8.2.10.2222 重新逆向重写）
  *
- * 核心策略：
- *   1. 精确 Hook 已知门禁（ca1.a.isEnabled / g1.isLogin）→ 返回 true
- *   2. 阻止 DeveloperOptionsActivity 在界面显示前被 finish()
- *   3. 精确 Hook 失败时才启动动态扫描兜底
+ * 逆向结论（全部在本机 APK 中确认过，符号名见各常量注释）：
  *
- * 注意：本模块基于 Xposed API 82 编译，该版本没有
- * {@code XC_MethodReplacement.returnTrue()}，只能使用
- * {@code XC_MethodReplacement.returnConstant(Boolean.TRUE)}。
+ *   1) 小米自家开发者选项门禁：
+ *        ca1.a.a.isEnabled()  → 读 MMKV 键 dev_options_enabled（默认 false）
+ *        com.xiaomi.voiceassistant.g1.isLogin()
+ *      「关于」页 AboutSettingsActivity 只在 isEnabled() && isLogin() 时才把
+ *      key_dev_options 这一项加进列表；DeveloperOptionsActivity.onCreate 里
+ *      同一组判断失败会直接 finish()+return（所以只拦 finish 会得到空白页）。
+ *
+ *   2) 该版本 DeveloperOptionsActivity 里只有「扫码调试」（activity_developer_options
+ *      只绑了返回键 + ScanDebugActivity），第三方 LLM 配置已经不在这里，而是搬到了
+ *      MiClaw / 智能体（osbot）那一层：
+ *        com.aios.osbot.ui.settings.q8            → DevOptionState#getUnlocked()/setUnlocked()
+ *        com.aios.osbot.ui.settings.eg            → SettingsViewModel#getDevOptionState()
+ *        com.aios.osbot.store.debug.DevOptionsScreen → LLM 设置界面
+ *        DataStore qk.m0 (CoreSettingsDataStore):
+ *              llm_provider / api_key / model_name / openai_base_url / temperature ...
+ *
+ * 因此本模块做两件事：
+ *   A. 放行小米那两道门禁（含状态一致：直接让 prefs 读数也为 true）
+ *   B. 放行 osbot 的开发者状态，并把用户在 xiaoai_llm.conf 里填的第三方
+ *      OpenAI 兼容配置写进 osbot DataStore
  */
 public class HookEntry implements IXposedHookLoadPackage {
 
     private static final String TAG = "AiDevOpt";
     private static final String TARGET_PKG = "com.miui.voiceassist";
-    private static final String DEV_OPTIONS_ACTIVITY =
-            "com.xiaomi.voiceassistant.settings.debug.DeveloperOptionsActivity";
 
-    /** 动态扫描开销较大（要加载 com.xiaomi.** 全部类），仅在精确 Hook 失败时启用。 */
-    private static final boolean ENABLE_DYNAMIC_SCAN = true;
+    /** 小米开发者选项开关单例（8.2.10.2222: ca1/a） */
+    private static final String CLS_DEV_SWITCH = "ca1.a";
+    /** 登录门禁（com.xiaomi.voiceassistant.g1.isLogin） */
+    private static final String CLS_LOGIN = "com.xiaomi.voiceassistant.g1";
+    /** MMKV 读取封装（com.xiaomi.voiceassist.baselibrary.utils.g1） */
+    private static final String CLS_PREFS = "com.xiaomi.voiceassist.baselibrary.utils.g1";
+    /** 状态键 */
+    private static final String KEY_DEV_ENABLED = "dev_options_enabled";
+    /** 小米开发者选项界面 */
+    private static final String CLS_DEV_ACTIVITY =
+            "com.xiaomi.voiceassistant.settings.debug.DeveloperOptionsActivity";
+    /** osbot 开发者选项状态（DevOptionState，混淆名 q8） */
+    private static final String CLS_OSBOT_DEV_STATE = "com.aios.osbot.ui.settings.q8";
+    /** osbot 设置 DataStore（CoreSettingsDataStore，混淆名 qk.m0） */
+    private static final String CLS_OSBOT_STORE = "qk.m0";
 
     private static final XC_MethodReplacement RETURN_TRUE =
             XC_MethodReplacement.returnConstant(Boolean.TRUE);
 
-    /** 已 Hook 的方法，避免重复 Hook。 */
-    private static final Set<Member> HOOKED =
-            Collections.synchronizedSet(new HashSet<Member>());
-
-    /** 已经正常显示过（onResume）的 DeveloperOptionsActivity 实例。 */
-    private static final Set<Object> RESUMED =
-            Collections.synchronizedSet(newSetFromMap());
-
-    private static volatile Class<?> sDevOptionsActivity;
-
-    private static Set<Object> newSetFromMap() {
-        return Collections.newSetFromMap(new WeakHashMap<Object, Boolean>());
-    }
-
     @Override
-    public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
-        if (!TARGET_PKG.equals(lpparam.packageName)) return;
+    public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lp) {
+        if (!TARGET_PKG.equals(lp.packageName)) return;
 
-        long start = System.currentTimeMillis();
-        XposedBridge.log(TAG + " | ======== 模块注入 ========");
-        XposedBridge.log(TAG + " | 目标进程: " + lpparam.packageName);
-        XposedBridge.log(TAG + " | ClassLoader: " + lpparam.classLoader);
+        XposedBridge.log(TAG + " | ======== 注入 " + lp.packageName + " ========");
 
-        // 策略 1：精确 Hook 已知门禁
-        boolean gatesOk = hookKnownGates(lpparam);
+        // ---- A. 小米开发者选项门禁 ----
+        hookDevSwitch(lp);
+        hookLoginGate(lp);
+        hookPrefsReader(lp);
 
-        // 策略 2：DeveloperOptionsActivity（含 finish 守卫）
-        boolean activityOk = hookDevOptionsActivity(lpparam);
+        // ---- B. osbot（MiClaw / 智能体）开发者状态 + 第三方 API 配置 ----
+        hookOsbotDevState(lp);
+        hookOsbotSettingsStore(lp);
 
-        // 策略 3：仅在精确 Hook 失败时动态扫描兜底
-        if (ENABLE_DYNAMIC_SCAN && !(gatesOk && activityOk)) {
-            scheduleDynamicScan(lpparam);
-        } else if (ENABLE_DYNAMIC_SCAN) {
-            XposedBridge.log(TAG + " | 精确 Hook 全部命中，跳过动态扫描");
-        }
+        // 诊断：确认开发者界面的 onCreate / setContentView 是否真的执行了
+        hookDevOptionsActivity(lp);
 
-        XposedBridge.log(TAG + " | ======== Hook 完成 (" +
-                (System.currentTimeMillis() - start) + "ms) ========");
+        XposedBridge.log(TAG + " | ======== Hook 完成 ========");
     }
 
-    // ==================== 策略 1：精确 Hook 已知门禁 ====================
+    // ==================== A. 小米门禁 ====================
+
+    /** ca1.a.a.isEnabled() → true，并让 clear() 变成空操作 */
+    private void hookDevSwitch(XC_LoadPackage.LoadPackageParam lp) {
+        Class<?> clazz = findClassOrNull(CLS_DEV_SWITCH, lp.classLoader);
+        if (clazz == null) {
+            XposedBridge.log(TAG + " | ✗ 未找到 " + CLS_DEV_SWITCH + "（App 版本可能变了）");
+            return;
+        }
+
+        Method isEnabled = findMethod(clazz, "isEnabled", boolean.class, 0, false);
+        if (isEnabled != null) {
+            XposedBridge.hookMethod(isEnabled, RETURN_TRUE);
+            XposedBridge.log(TAG + " | ✓ hook " + CLS_DEV_SWITCH + ".isEnabled() → true");
+        } else {
+            XposedBridge.log(TAG + " | ✗ " + CLS_DEV_SWITCH + " 缺少 isEnabled()");
+        }
+
+        Method clear = findMethod(clazz, "clear", void.class, 0, false);
+        if (clear != null) {
+            XposedBridge.hookMethod(clear, XC_MethodReplacement.DO_NOTHING);
+            XposedBridge.log(TAG + " | ✓ hook " + CLS_DEV_SWITCH + ".clear() → 空操作");
+        }
+    }
+
+    /** com.xiaomi.voiceassistant.g1.isLogin() → true（静态，内部 new eb1.c().isLogin()） */
+    private void hookLoginGate(XC_LoadPackage.LoadPackageParam lp) {
+        Class<?> clazz = findClassOrNull(CLS_LOGIN, lp.classLoader);
+        if (clazz == null) {
+            XposedBridge.log(TAG + " | ✗ 未找到 " + CLS_LOGIN);
+            return;
+        }
+        Method isLogin = findMethod(clazz, "isLogin", boolean.class, 0, true);
+        if (isLogin == null) {
+            isLogin = findMethod(clazz, "isLogin", boolean.class, 0, false);
+        }
+        if (isLogin != null) {
+            XposedBridge.hookMethod(isLogin, RETURN_TRUE);
+            XposedBridge.log(TAG + " | ✓ hook " + CLS_LOGIN + ".isLogin() → true");
+        } else {
+            XposedBridge.log(TAG + " | ✗ " + CLS_LOGIN + " 缺少 isLogin()");
+        }
+    }
 
     /**
-     * @return 两个关键门禁（isEnabled / isLogin）是否都成功命中
+     * 让 prefs 读取 dev_options_enabled 也返回 true。
+     * 这样界面上开关状态、其他读取方都与我们的 Hook 结果一致，避免「门禁放行了但开关显示关闭」。
      */
-    private boolean hookKnownGates(XC_LoadPackage.LoadPackageParam lpparam) {
-        // --- 1a. ca1.a.isEnabled() → 开发者选项总开关 ---
-        boolean enabledOk = hookBooleanGate(lpparam, "isEnabled", true, "ca1.a");
-
-        // 原实现还顺带 Hook 了 ca1.a.invoke()，保留但只在静态无参 boolean 时生效
-        if (enabledOk) {
-            hookBooleanGate(lpparam, "invoke", false, "ca1.a");
+    private void hookPrefsReader(XC_LoadPackage.LoadPackageParam lp) {
+        Class<?> clazz = findClassOrNull(CLS_PREFS, lp.classLoader);
+        if (clazz == null) {
+            XposedBridge.log(TAG + " | ✗ 未找到 " + CLS_PREFS);
+            return;
         }
-
-        // --- 1b. g1.isLogin() → 小米账号登录检查 ---
-        // 反混淆分析里门禁是默认包下的 g1，混淆名可能变化，因此多列几个候选
-        boolean loginOk = hookBooleanGate(lpparam, "isLogin", true,
-                "g1", "e1", "f1", "h1",
-                "com.xiaomi.voiceassistant.g1",
-                "com.xiaomi.voiceassistant.e1",
-                "com.xiaomi.voiceassistant.f1",
-                "com.xiaomi.voiceassistant.h1",
-                "com.xiaomi.ai.android.auth",
-                "com.aios.osbot.auth");
-
-        return enabledOk && loginOk;
-    }
-
-    /**
-     * 在候选类里查找 {@code methodName()} 形式、无参、返回 boolean/Boolean 的方法并强制返回 true。
-     *
-     * @param allowInstance 是否允许回退到实例方法
-     * @return 是否至少命中一个方法
-     */
-    private boolean hookBooleanGate(
-            XC_LoadPackage.LoadPackageParam lpparam,
-            String methodName,
-            boolean allowInstance,
-            String... classNames) {
-
-        boolean hit = false;
-        for (String className : classNames) {
-            Class<?> clazz;
-            try {
-                clazz = XposedHelpers.findClass(className, lpparam.classLoader);
-            } catch (Throwable t) {
-                continue; // 候选类不存在，正常情况
-            }
-
-            Method target = findMethod(clazz, methodName, true);
-            if (target == null && allowInstance) {
-                target = findMethod(clazz, methodName, false);
-            }
-            if (target == null) {
-                XposedBridge.log(TAG + " | ⚠ " + className + " 存在但没有 " + methodName + "()Z");
-                continue;
-            }
-            if (hookReturnTrue(target)) {
-                hit = true;
-            }
-        }
-        if (!hit) {
-            XposedBridge.log(TAG + " | ✗ 未能 Hook 门禁方法: " + methodName + "()");
-        }
-        return hit;
-    }
-
-    /** 找出无参 boolean/Boolean 方法，优先静态。 */
-    private Method findMethod(Class<?> clazz, String methodName, boolean requireStatic) {
+        Method getBoolean = null;
         for (Method m : clazz.getDeclaredMethods()) {
-            if (!m.getName().equals(methodName)) continue;
-            if (m.getParameterCount() != 0) continue;
-            if (!isBooleanReturn(m)) continue;
+            if (m.getName().equals("getBoolean")
+                    && m.getReturnType() == boolean.class
+                    && m.getParameterCount() == 2
+                    && m.getParameterTypes()[0] == String.class
+                    && m.getParameterTypes()[1] == boolean.class) {
+                getBoolean = m;
+                break;
+            }
+        }
+        if (getBoolean == null) {
+            XposedBridge.log(TAG + " | ✗ " + CLS_PREFS + " 缺少 getBoolean(String, boolean)");
+            return;
+        }
+        XposedBridge.hookMethod(getBoolean, new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) {
+                if (KEY_DEV_ENABLED.equals(param.args[0])) {
+                    param.setResult(Boolean.TRUE);
+                    XposedBridge.log(TAG + " | ✓ prefs.getBoolean(" + KEY_DEV_ENABLED + ") → true");
+                }
+            }
+        });
+        XposedBridge.log(TAG + " | ✓ hook " + CLS_PREFS + ".getBoolean(..)");
+    }
+
+    // ==================== B. osbot 开发者状态 ====================
+
+    /**
+     * DevOptionState（com.aios.osbot.ui.settings.q8）：
+     *   public boolean getUnlocked() / setUnlocked(boolean)
+     * 这是 MiClaw 设置里「开发者选项」入口的开关，置为 true 才会显示。
+     */
+    private void hookOsbotDevState(XC_LoadPackage.LoadPackageParam lp) {
+        Class<?> clazz = findClassOrNull(CLS_OSBOT_DEV_STATE, lp.classLoader);
+        if (clazz == null) {
+            XposedBridge.log(TAG + " | ✗ 未找到 " + CLS_OSBOT_DEV_STATE
+                    + "（osbot 混淆名可能变了，智能体里的开发者入口无法解锁）");
+            return;
+        }
+
+        Method getUnlocked = findMethod(clazz, "getUnlocked", boolean.class, 0, false);
+        if (getUnlocked != null) {
+            XposedBridge.hookMethod(getUnlocked, RETURN_TRUE);
+            XposedBridge.log(TAG + " | ✓ hook DevOptionState.getUnlocked() → true");
+        }
+        Method setUnlocked = findMethod(clazz, "setUnlocked", void.class, 1, false);
+        if (setUnlocked != null) {
+            XposedBridge.hookMethod(setUnlocked, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    param.args[0] = Boolean.TRUE;
+                }
+            });
+            XposedBridge.log(TAG + " | ✓ hook DevOptionState.setUnlocked(false) → 强制 true");
+        }
+    }
+
+    /**
+     * CoreSettingsDataStore（qk.m0）构造完成时拿到实例，把 xiaoai_llm.conf 里的
+     * 第三方 API 配置写进去（setApiKey / setOpenAIBaseUrl / setModelName / setLlmProvider ...）。
+     */
+    private void hookOsbotSettingsStore(XC_LoadPackage.LoadPackageParam lp) {
+        final Class<?> clazz = findClassOrNull(CLS_OSBOT_STORE, lp.classLoader);
+        if (clazz == null) {
+            XposedBridge.log(TAG + " | ✗ 未找到 " + CLS_OSBOT_STORE + "（无法写入第三方 API 配置）");
+            return;
+        }
+        XposedBridge.hookAllConstructors(clazz, new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) {
+                try {
+                    Application app = currentApplication();
+                    if (app != null) {
+                        LlmConfig.load(app);
+                    }
+                    LlmConfig.apply(param.thisObject, clazz.getClassLoader());
+                } catch (Throwable t) {
+                    XposedBridge.log(TAG + " | [conf] 应用失败: " + t);
+                }
+            }
+        });
+        XposedBridge.log(TAG + " | ✓ hook " + CLS_OSBOT_STORE + " 构造（用于写入 LLM 配置）");
+    }
+
+    // ==================== 诊断 ====================
+
+    private void hookDevOptionsActivity(XC_LoadPackage.LoadPackageParam lp) {
+        Class<?> clazz = findClassOrNull(CLS_DEV_ACTIVITY, lp.classLoader);
+        if (clazz == null) {
+            XposedBridge.log(TAG + " | ✗ 未找到 " + CLS_DEV_ACTIVITY);
+            return;
+        }
+        XposedHelpers.findAndHookMethod(clazz, "onCreate", Bundle.class, new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) {
+                XposedBridge.log(TAG + " | → DeveloperOptionsActivity.onCreate 进入（门禁已被放行）");
+            }
+        });
+        XposedHelpers.findAndHookMethod(clazz, "setContentView", int.class, new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) {
+                XposedBridge.log(TAG + " | ✓ setContentView(" + param.args[0] + ") 执行 —— 页面正常渲染");
+            }
+        });
+    }
+
+    // ==================== 工具 ====================
+
+    private static Application currentApplication() {
+        try {
+            return AndroidAppHelper.currentApplication();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    static Class<?> findClassOrNull(String name, ClassLoader cl) {
+        try {
+            return XposedHelpers.findClass(name, cl);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 精确匹配无参/单参方法 */
+    static Method findMethod(Class<?> clazz, String name, Class<?> returnType,
+                             int paramCount, boolean requireStatic) {
+        for (Method m : clazz.getDeclaredMethods()) {
+            if (!m.getName().equals(name)) continue;
+            if (m.getReturnType() != returnType) continue;
+            if (m.getParameterCount() != paramCount) continue;
             if (Modifier.isStatic(m.getModifiers()) != requireStatic) continue;
             if (Modifier.isAbstract(m.getModifiers())) continue;
             return m;
@@ -170,261 +279,4 @@ public class HookEntry implements IXposedHookLoadPackage {
         return null;
     }
 
-    private static boolean isBooleanReturn(Method m) {
-        Class<?> rt = m.getReturnType();
-        return rt == boolean.class || rt == Boolean.class;
-    }
-
-    /**
-     * 把方法结果固定为 true。
-     *
-     * @return 是否新 Hook 成功（已 Hook 过或不可 Hook 时返回 false）
-     */
-    private static boolean hookReturnTrue(Method m) {
-        if (!isBooleanReturn(m) || m.getParameterCount() != 0) return false;
-        if (Modifier.isAbstract(m.getModifiers()) || Modifier.isNative(m.getModifiers())) return false;
-        if (!HOOKED.add(m)) return false;
-        try {
-            XposedBridge.hookMethod(m, RETURN_TRUE);
-            XposedBridge.log(TAG + " | ✓ hook: " + m.getDeclaringClass().getName() +
-                    "." + m.getName() + "() → true");
-            return true;
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + " | ✗ hook 失败 " + m.getDeclaringClass().getName() +
-                    "." + m.getName() + ": " + t);
-            return false;
-        }
-    }
-
-    /**
-     * Hook 类中所有名字像登录标记的无参 boolean 方法 → true。
-     * 属于启发式匹配，若目标 App 出现异常可收窄关键字。
-     */
-    private int hookLoginMethods(Class<?> clazz, String tag) {
-        int count = 0;
-        for (Method m : clazz.getDeclaredMethods()) {
-            String name = m.getName().toLowerCase();
-            if ((name.contains("login") || name.contains("logged")) && hookReturnTrue(m)) {
-                count++;
-            }
-        }
-        if (count > 0) {
-            XposedBridge.log(TAG + " | ✓ " + tag + " 命中 " + count + " 个登录标记方法");
-        }
-        return count;
-    }
-
-    // ==================== 策略 2：DeveloperOptionsActivity ====================
-
-    private boolean hookDevOptionsActivity(XC_LoadPackage.LoadPackageParam lpparam) {
-        Class<?> clazz;
-        try {
-            clazz = XposedHelpers.findClass(DEV_OPTIONS_ACTIVITY, lpparam.classLoader);
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + " | ✗ " + DEV_OPTIONS_ACTIVITY + " 不存在: " + t.getMessage());
-            return false;
-        }
-        sDevOptionsActivity = clazz;
-
-        try {
-            XposedHelpers.findAndHookMethod(clazz, "onCreate", Bundle.class, new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) {
-                    XposedBridge.log(TAG + " | ✓ DeveloperOptionsActivity.onCreate 已进入（门禁已被绕过）");
-                }
-            });
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + " | ✗ onCreate Hook 失败: " + t);
-            return false;
-        }
-
-        // 记录界面是否真的显示出来了，用于 finish 守卫
-        try {
-            XposedHelpers.findAndHookMethod(clazz, "onResume", new XC_MethodHook() {
-                @Override
-                protected void afterHookedMethod(MethodHookParam param) {
-                    RESUMED.add(param.thisObject);
-                }
-            });
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + " | ⚠ onResume Hook 失败，finish 守卫将退化为仅按类型判断: " + t);
-        }
-
-        try {
-            XposedHelpers.findAndHookMethod(clazz, "onDestroy", new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) {
-                    RESUMED.remove(param.thisObject);
-                }
-            });
-        } catch (Throwable ignored) {
-        }
-
-        hookActivityFinish();
-        XposedBridge.log(TAG + " | ✓ DeveloperOptionsActivity hooked");
-        return true;
-    }
-
-    /**
-     * 只 Hook 一次 android.app.Activity.finish()。
-     *
-     * 原实现在每次 onCreate 里再 Hook 一次 Activity.finish()，每次进入该页面都会叠加一个
-     * Hook 回调（Hook 泄漏），而且用的是 lpparam.classLoader 去查 android.app.Activity。
-     * 这里改为：全局单次 Hook + 按实例类型判断 + 界面未显示前才拦截。
-     */
-    private void hookActivityFinish() {
-        try {
-            XposedHelpers.findAndHookMethod(Activity.class, "finish", new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) {
-                    Class<?> dev = sDevOptionsActivity;
-                    if (dev == null || !dev.isInstance(param.thisObject)) return;
-                    // 界面已经正常显示过 → 允许正常退出（返回键、跳转等）
-                    if (RESUMED.contains(param.thisObject)) return;
-
-                    XposedBridge.log(TAG + " | ✓ 阻止 DeveloperOptionsActivity 在显示前被 finish()");
-                    param.setResult(null);
-                }
-            });
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + " | ✗ Activity.finish Hook 失败: " + t);
-        }
-    }
-
-    // ==================== 策略 3：动态扫描兜底 ====================
-
-    /**
-     * 延后到 Application.onCreate 之后再扫描。
-     *
-     * handleLoadPackage 阶段 {@code AndroidAppHelper.currentApplication()} 通常还是 null，
-     * 原实现因此会直接 return —— 兜底扫描实际上从来不会执行。等到 Application.onCreate 时：
-     * Application 一定存在、split APK / 插件 dex 也都已挂载，扫描结果更完整。
-     */
-    private void scheduleDynamicScan(final XC_LoadPackage.LoadPackageParam lpparam) {
-        try {
-            XposedHelpers.findAndHookMethod("android.app.Application", lpparam.classLoader,
-                    "onCreate", new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
-                            // 扫描要加载成千上万个类，放到后台线程，避免拖慢启动
-                            Thread t = new Thread(new Runnable() {
-                                @Override
-                                public void run() {
-                                    dynamicScanAndHook(lpparam);
-                                }
-                            }, "AiDevOptScan");
-                            t.setDaemon(true);
-                            t.start();
-                        }
-                    });
-            XposedBridge.log(TAG + " | 已在 Application.onCreate 注册动态扫描兜底");
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + " | 注册动态扫描失败，立即执行一次: " + t);
-            dynamicScanAndHook(lpparam);
-        }
-    }
-
-    /**
-     * 扫描已加载 DEX 中的类，寻找混淆后名字未知的门禁方法。
-     * 只在精确 Hook 失败时调用：要加载 com/xiaomi/** 下全部类，代价较高。
-     */
-    private void dynamicScanAndHook(XC_LoadPackage.LoadPackageParam lpparam) {
-        long start = System.currentTimeMillis();
-        try {
-            Application app = AndroidAppHelper.currentApplication();
-            if (app == null) {
-                XposedBridge.log(TAG + " | 动态扫描提示：Application 为 null，改用 ClassLoader 取 dex");
-            }
-
-            List<DexFile> dexFiles = collectDexFiles(app, lpparam.classLoader);
-            if (dexFiles.isEmpty()) {
-                XposedBridge.log(TAG + " | 动态扫描跳过：拿不到 DexFile");
-                return;
-            }
-
-            Set<String> seen = new HashSet<String>();
-            int scanned = 0;
-            int hooked = 0;
-
-            for (DexFile dex : dexFiles) {
-                Enumeration<String> entries = dex.entries();
-                while (entries.hasMoreElements()) {
-                    String entry = entries.nextElement();
-
-                    // 只扫描目标包下的类
-                    if (!entry.startsWith("com/xiaomi/") && !entry.startsWith("com/aios/")) {
-                        continue;
-                    }
-                    if (!seen.add(entry)) {
-                        continue; // 多 dex / 分包会重复
-                    }
-                    scanned++;
-
-                    // DexFile.entries() 返回的是 "com/xiaomi/xxx" 斜杠形式，
-                    // Class.forName 需要点号形式（原实现少了这一步，导致扫描永远静默失败）
-                    String className = entry.replace('/', '.');
-
-                    try {
-                        Class<?> clazz = Class.forName(className, false, lpparam.classLoader);
-                        hooked += hookLoginMethods(clazz, className);
-
-                        // settings.debug / DevOption 包下的 isEnabled() 也一并放行
-                        if (entry.contains("settings/debug") || entry.contains("DevOption")) {
-                            for (Method m : clazz.getDeclaredMethods()) {
-                                if (m.getName().contains("isEnabled") && hookReturnTrue(m)) {
-                                    hooked++;
-                                }
-                            }
-                        }
-
-                        if (className.contains("SettingsScreen")) {
-                            XposedBridge.log(TAG + " | ✓ 找到 SettingsScreen 类: " + className);
-                        }
-                    } catch (Throwable ignored) {
-                        // 类加载失败（缺少可选依赖等），跳过
-                    }
-                }
-            }
-
-            XposedBridge.log(TAG + " | 动态扫描完成: 扫描 " + scanned + " 个类, 新 hook " +
-                    hooked + " 个方法, 耗时 " + (System.currentTimeMillis() - start) + "ms");
-
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + " | 动态扫描异常: " + t);
-        }
-    }
-
-    /**
-     * 取到当前进程的 DexFile 列表。
-     * 优先走 BaseDexClassLoader.pathList.dexElements（能覆盖 split APK），
-     * 失败时退回 new DexFile(packageCodePath)。
-     */
-    @SuppressWarnings("deprecation")
-    private List<DexFile> collectDexFiles(Application app, ClassLoader cl) {
-        List<DexFile> out = new ArrayList<DexFile>();
-        try {
-            Object pathList = XposedHelpers.getObjectField(cl, "pathList");
-            Object[] elements = (Object[]) XposedHelpers.getObjectField(pathList, "dexElements");
-            for (Object element : elements) {
-                try {
-                    Object df = XposedHelpers.getObjectField(element, "dexFile");
-                    if (df instanceof DexFile) {
-                        out.add((DexFile) df);
-                    }
-                } catch (Throwable ignored) {
-                }
-            }
-        } catch (Throwable t) {
-            XposedBridge.log(TAG + " | pathList 反射失败，改用 DexFile(path): " + t.getMessage());
-        }
-
-        if (out.isEmpty() && app != null) {
-            try {
-                out.add(new DexFile(app.getPackageCodePath()));
-            } catch (Throwable t) {
-                XposedBridge.log(TAG + " | DexFile 打开失败: " + t.getMessage());
-            }
-        }
-        return out;
-    }
 }
