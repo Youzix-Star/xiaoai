@@ -284,6 +284,40 @@ AiDevOpt | ✓ setContentView(2131558469) 执行 —— 页面正常渲染
 
 看到 `✗ 未找到 …` 说明该 App 版本的混淆名变了，那一行会指出是哪一类符号失效。
 
+## 实测结论：已在真机跑通
+
+在 **8.2.10.2222** 上验证通过：小爱的对话会触发**本地** LLM 调用（会话摘要、记忆提取等），
+在 LLM 配置出口强制改写之后，这些调用确实打到了配置的第三方 API —— DeepSeek 后台出现用量。
+
+成功时的日志特征：
+
+```
+[test] POST https://api.deepseek.com/chat/completions model=deepseek-flash
+[test] HTTP 200 ← {"object":"chat.completion","model":"deepseek-flash","choices":[…]}   ← 面板「测 API」
+[llm] 强制 getBaseUrl() → https://api.deepseek.com
+[llm] 强制 getModel() → deepseek-flash
+[llm] 生效配置 provider=openai base_url=https://api.deepseek.com model=deepseek-flash
+→ 本地 LLM 调用 generateText | 你是一个会话摘要助手…(322 字符) | memoryextract-searchrouter-model
+→ 本地 LLM 调用 generateText | 你是"记忆提取决策分类器"…(4988 字符) | turn_id:14 query:你是谁
+```
+
+排查时踩过的两个坑，写在这里省得重复：
+
+1. **日志是按进程分段的**，每次启动新起一段。只看启动阶段的日志，永远看不到对话触发的调用 ——
+   必须“强制停止小爱 → 打开 → 真的说几句话 → 再读日志”。
+2. **`[http]` 探针有盲区**：它挂在 `java.net.URL` 上，而 App 的 LLM 客户端走 Ktor 的
+   **OkHttp 引擎**（okhttp 4.12.0 在包内、类名被混淆），不会构造 `java.net.URL`。
+   判断真实请求地址要看 **`[net]`**（挂在 `AndroidClientEngine#execute` /
+   `OkHttpEngine#executeHttpRequest` 上）。
+
+### 仍然由小米服务端承担的部分
+
+本地 Hook 改不到这些（不是模块缺陷，是架构如此）：
+
+- **提示词下发**：`miclaw.security.xiaomi.net/miclaw/sec/v1/ai/prompt/…`、`/nonce?fid=…`
+- 设备侧抓到的其他小米域名：`api.mijia.tech`、`storage.cnbj2m.mi-fds.com`
+- ASR / TTS 等语音能力
+
 ## 排查「配置没生效」用哪几行日志
 
 模块内置三个探针，配完不生效时按顺序看：
