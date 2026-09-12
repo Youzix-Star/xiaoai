@@ -63,6 +63,10 @@ public class HookEntry implements IXposedHookLoadPackage {
     /** osbot 语音/提示词 DataStore（VoiceSettingsDataStore，混淆名 vu.q）
      *  持有 voice_system_prompt / voice_custom_system_prompt */
     private static final String CLS_OSBOT_PROMPT_STORE = "vu.q";
+    /** LLM 配置数据类（SettingsRepositoryImpl 用它下发 base_url/model/provider） */
+    private static final String CLS_LLM_CONFIG = "tm.a";
+    /** 本地 LLM 调用服务（com.aios.osbot.memory.claw...LlmService） */
+    private static final String CLS_LLM_SERVICE = "ep.j";
 
     private static final XC_MethodReplacement RETURN_TRUE =
             XC_MethodReplacement.returnConstant(Boolean.TRUE);
@@ -150,6 +154,14 @@ public class HookEntry implements IXposedHookLoadPackage {
             @Override
             public void run() {
                 hookDevOptionsActivity(lp);
+            }
+        });
+
+        // 诊断：生效的 LLM 配置 / 本地 LLM 调用 / 是否有人访问配置的地址
+        step("LLM 诊断", new Step() {
+            @Override
+            public void run() {
+                hookLlmDiagnostics(lp);
             }
         });
 
@@ -344,7 +356,7 @@ public class HookEntry implements IXposedHookLoadPackage {
                                 Diag.init(app);
                                 LlmConfig.load(app);
                                 if (LlmConfig.floatingEnabled()) {
-                                    FloatingPanel.show(app);
+                                    FloatingPanel.attachLifecycle(app);
                                 } else {
                                     Diag.log("悬浮窗已按配置关闭（floating_button=false）");
                                 }
@@ -357,6 +369,114 @@ public class HookEntry implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             Diag.log("✗ 悬浮窗注册失败: " + t);
         }
+    }
+
+    // ==================== LLM 诊断 ====================
+
+    /**
+     * 三个探针，用来回答「配置到底有没有被用」：
+     *   1. LLM 配置对象（tm.a）构建时打印生效的 base_url / model / provider / 系统提示词
+     *   2. 本地 LLM 调用入口（ep.j#generateText）被调用时打印
+     *   3. url 层探针：只记录 chat/completions 或 deepseek 相关地址
+     */
+    private void hookLlmDiagnostics(XC_LoadPackage.LoadPackageParam lp) {
+        Class<?> cfg = findClassOrNull(CLS_LLM_CONFIG, lp.classLoader);
+        if (cfg != null) {
+            XposedBridge.hookAllConstructors(cfg, new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    printLlmConfig(param.thisObject);
+                }
+            });
+            Diag.log("✓ hook LLM 配置对象 " + CLS_LLM_CONFIG);
+        } else {
+            Diag.log("✗ 未找到 " + CLS_LLM_CONFIG + "（LLM 配置对象）");
+        }
+
+        Class<?> svc = findClassOrNull(CLS_LLM_SERVICE, lp.classLoader);
+        if (svc != null) {
+            XposedBridge.hookAllMethods(svc, "generateText", new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    String name = ((Method) param.method).getName();
+                    if (!"generateText".equals(name)) return;   // 跳过 synthetic 版本
+                    StringBuilder sb = new StringBuilder();
+                    if (param.args != null) {
+                        for (Object a : param.args) {
+                            if (a instanceof String) {
+                                sb.append(" | ").append(shorten((String) a));
+                            }
+                        }
+                    }
+                    Diag.log("→ 本地 LLM 调用 generateText" + sb);
+                }
+            });
+            Diag.log("✓ hook 本地 LLM 调用入口 " + CLS_LLM_SERVICE + "#generateText");
+        } else {
+            Diag.log("✗ 未找到 " + CLS_LLM_SERVICE + "（LLM 调用服务）");
+        }
+
+        try {
+            XposedBridge.hookAllConstructors(java.net.URL.class, new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    String url = urlOf(param.args);
+                    if (url == null) return;
+                    if (url.contains("chat/completions") || url.contains("deepseek")
+                            || url.contains("/v1/messages")) {
+                        Diag.log("[http] " + shorten(url));
+                    }
+                }
+            });
+            Diag.log("✓ 已挂 URL 探针（只记录 LLM 相关地址）");
+        } catch (Throwable t) {
+            Diag.log("✗ URL 探针注册失败: " + t);
+        }
+    }
+
+    /** URL 构造参数可能是 (String) 或 (protocol, host, port, file) */
+    private static String urlOf(Object[] args) {
+        if (args == null || args.length == 0) return null;
+        if (args.length >= 4 && args[0] instanceof String && args[1] instanceof String) {
+            return args[0] + "://" + args[1] + (args[3] instanceof String ? args[3] : "");
+        }
+        return args[0] instanceof String ? (String) args[0] : null;
+    }
+
+    private static void printLlmConfig(Object cfg) {
+        try {
+            Object base = callGetter(cfg, "getBaseUrl");
+            Object model = callGetter(cfg, "getModel");
+            Object provider = callGetter(cfg, "getProvider");
+            Object key = callGetter(cfg, "getApiKey");
+            Diag.log("[llm] 生效配置 provider=" + provider + " base_url=" + base
+                    + " model=" + model + " api_key=" + maskKey(String.valueOf(key)));
+            Object sys = callGetter(cfg, "getSystemPrompt");
+            if (sys != null && String.valueOf(sys).trim().length() > 0) {
+                Diag.log("[llm] 生效系统提示词: " + shorten(String.valueOf(sys)));
+            }
+        } catch (Throwable t) {
+            Diag.log("[llm] 打印配置失败: " + t);
+        }
+    }
+
+    private static Object callGetter(Object target, String getter) {
+        try {
+            return target.getClass().getMethod(getter).invoke(target);
+        } catch (Throwable t) {
+            return "?";
+        }
+    }
+
+    private static String maskKey(String v) {
+        if (v == null || v.length() <= 6) return "***";
+        return v.substring(0, 4) + "***" + v.substring(v.length() - 2);
+    }
+
+    private static String shorten(String s) {
+        if (s == null) return "";
+        String one = s.replace("\n", " ");
+        return one.length() > 60 ? one.substring(0, 60) + "…(" + one.length() + " 字符)" : one;
     }
 
     // ==================== 诊断 ====================

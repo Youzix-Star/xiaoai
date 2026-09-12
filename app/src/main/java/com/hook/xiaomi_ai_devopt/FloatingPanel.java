@@ -1,9 +1,12 @@
 package com.hook.xiaomi_ai_devopt;
 
+import android.app.Activity;
+import android.app.Application;
 import android.content.Context;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
 import android.text.InputType;
+import android.os.Bundle;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -53,6 +56,8 @@ final class FloatingPanel {
     private static View sPanel;
     private static View sLogView;
     private static boolean sButtonShown;
+    /** 长按隐藏：本次进程内不再自动出现 */
+    private static boolean sUserHidden;
 
     private static final Map<String, EditText> FIELDS = new LinkedHashMap<String, EditText>();
     private static CheckBox sOverrideBox;
@@ -60,10 +65,84 @@ final class FloatingPanel {
     private FloatingPanel() {
     }
 
+    // ==================== 前台跟踪（只在小爱处于前台时显示）====================
+
+    /**
+     * 用 ActivityLifecycleCallbacks 跟踪本进程是否有界面在前台：
+     * 有界面 → 显示悬浮球；全部进入后台 → 移除悬浮球（含已打开的面板/日志窗口）。
+     */
+    static void attachLifecycle(final Application app) {
+        sCtx = app;
+        try {
+            app.registerActivityLifecycleCallbacks(new Application.ActivityLifecycleCallbacks() {
+                private int started;
+
+                @Override
+                public void onActivityCreated(Activity activity, Bundle bundle) {
+                }
+
+                @Override
+                public void onActivityStarted(Activity activity) {
+                    started++;
+                    if (started == 1 && !sUserHidden && LlmConfig.floatingEnabled()) {
+                        show(app);
+                    }
+                }
+
+                @Override
+                public void onActivityResumed(Activity activity) {
+                }
+
+                @Override
+                public void onActivityPaused(Activity activity) {
+                }
+
+                @Override
+                public void onActivityStopped(Activity activity) {
+                    started--;
+                    if (started <= 0) {
+                        started = 0;
+                        hideForBackground();
+                    }
+                }
+
+                @Override
+                public void onActivitySaveInstanceState(Activity activity, Bundle bundle) {
+                }
+
+                @Override
+                public void onActivityDestroyed(Activity activity) {
+                }
+            });
+            Diag.log("✓ 悬浮球已绑定前台生命周期（仅小爱在前台时显示）");
+        } catch (Throwable t) {
+            Diag.log("✗ 前台生命周期注册失败: " + t);
+        }
+    }
+
+    /** 进入后台：移除悬浮球与已打开的面板，但不影响「长按隐藏」状态 */
+    private static void hideForBackground() {
+        removeViews();
+        Diag.log("悬浮球已随小爱退到后台而隐藏");
+    }
+
+    private static void removeViews() {
+        closeLogView();
+        closePanel();
+        if (sButton != null && sWm != null) {
+            try {
+                sWm.removeView(sButton);
+            } catch (Throwable ignored) {
+            }
+        }
+        sButton = null;
+        sButtonShown = false;
+    }
+
     // ==================== 悬浮球 ====================
 
     static void show(final Context ctx) {
-        if (sButtonShown || ctx == null) return;
+        if (sButtonShown || ctx == null || sUserHidden) return;
         sCtx = ctx;
         try {
             sWm = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
@@ -134,7 +213,8 @@ final class FloatingPanel {
             ball.setOnLongClickListener(new View.OnLongClickListener() {
                 @Override
                 public boolean onLongClick(View v) {
-                    hideButton();
+                    sUserHidden = true;
+                    removeViews();
                     toast(ctx, "悬浮球已隐藏（重启小爱可恢复）");
                     return true;
                 }
@@ -150,15 +230,8 @@ final class FloatingPanel {
     }
 
     static void hideButton() {
-        if (!sButtonShown || sWm == null || sButton == null) return;
-        try {
-            closeLogView();
-            closePanel();
-            sWm.removeView(sButton);
-        } catch (Throwable ignored) {
-        }
-        sButton = null;
-        sButtonShown = false;
+        sUserHidden = true;
+        removeViews();
     }
 
     // ==================== 配置面板 ====================

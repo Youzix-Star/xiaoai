@@ -63,7 +63,11 @@ LSPosed 模块。针对 **超级小爱 8.2.10.2222（`com.miui.voiceassist`）**
 |------|------|
 | 拖动 | 移动悬浮球位置 |
 | 点按 | 打开配置面板 |
-| 长按 | 临时隐藏（本次进程内不再显示，重启小爱恢复） |
+| 长按 | 隐藏（本次进程内不再出现，重启小爱恢复） |
+
+**只在小爱处于前台时显示**：通过 `Application.registerActivityLifecycleCallbacks` 跟踪本进程
+Activity 的前后台状态 —— 小爱退到后台（或你切到别的 App）时悬浮球自动移除，回到小爱时自动出现，
+不会再浮在桌面/其他应用上面。
 
 面板里可以直接改：API 地址、API Key、模型名、provider、provider_id、系统提示词、
 以及「按文件覆盖 Agent 提示词」开关。点 **保存并生效** 后会：
@@ -279,6 +283,24 @@ AiDevOpt | ✓ setContentView(2131558469) 执行 —— 页面正常渲染
 
 看到 `✗ 未找到 …` 说明该 App 版本的混淆名变了，那一行会指出是哪一类符号失效。
 
+## 排查「配置没生效」用哪几行日志
+
+模块内置三个探针，配完不生效时按顺序看：
+
+```
+[llm] 生效配置 provider=openai base_url=https://api.deepseek.com model=deepseek-flash api_key=sk-f***f0
+[llm] 生效系统提示词: 你是大肥鱼
+→ 本地 LLM 调用 generateText | 你是大肥鱼 | deepseek-flash
+[http] https://api.deepseek.com/chat/completions
+```
+
+| 日志 | 含义 |
+|------|------|
+| `[llm] 生效配置 …` | App 真正下发下去的 LLM 配置（`tm.a` 构建时打印），这里若还是小米地址，说明配置没被读 |
+| `[llm] 生效系统提示词:` | 提示词有没有进到配置对象里 |
+| `→ 本地 LLM 调用` | 这条链路**确实发起了本地 LLM 调用**；如果对话后完全没有这行，说明该链路是**云端（小米服务端）**完成的 |
+| `[http] …` | 实际访问的地址，出现 deepseek 才算真的走了第三方 API |
+
 ## 修复记录
 
 | # | 问题 | 处理 |
@@ -295,6 +317,8 @@ AiDevOpt | ✓ setContentView(2131558469) 执行 —— 页面正常渲染
 | 10 | `findAndHookMethod(clazz, "setContentView", ...)` 对子类做 **exact 查找**，而该方法继承自 `Activity` → 抛 `NoSuchMethodError` 并**冲出 `handleLoadPackage`**，导致后面所有 hook（含悬浮窗）全部没注册 | 改为 hook `Activity.setContentView` 再按实例类型过滤；并给每个 hook 步骤加独立 try/catch，一步失败不再拖垮整串 |
 | 11 | `Diag.init()` 之前的日志只进内存和 logcat，日志文件里缺了最关键的 hook 结果行 | `init()` 时把已缓冲的日志补写进文件 |
 | 12 | CI 每次产物签名都不同，升级安装会签名冲突（AGP 用的 keystore 并不在 `~/.android/debug.keystore`，缓存那个文件没用） | `app/build.gradle` 显式指定 debug 签名用 `$HOME/.android/debug.keystore`（可用环境变量 `XIAOAI_DEBUG_KEYSTORE` 覆盖），CI 再缓存该文件，并打印签名指纹 |
+| 14 | 悬浮球在小爱退到后台后仍浮在桌面上 | 用 `ActivityLifecycleCallbacks` 跟踪前后台，只在小爱处于前台时显示 |
+| 15 | 配完不生效却无从判断卡在哪一步 | 新增三个探针：`tm.a` 生效配置、`generateText` 本地调用入口、`java.net.URL` 层地址（只记 LLM 相关） |
 | 13 | **只写了智能体层的 `api_key` 那套键**，漏了语音层的 `voice_api_key` / `voice_api_base_url` / `voice_model_name` / `voice_provider`，导致语音对话完全不生效（配置有落盘，但没被语音链路读取） | 同一组值同时写入两层，语音层支持 `voice_*` 覆盖，并加回读校验日志 |
 
 ## 已知限制
@@ -309,8 +333,10 @@ AiDevOpt | ✓ setContentView(2131558469) 执行 —— 页面正常渲染
 - **只验证到「可编译 + 配置可解析」**：真机行为需要以日志为准，仓库内没有 App 样本。
 - `provider_id` 等可选字段按需填写，留空则不写入；提示词同理，留空即保持 App 原值。
 - **两层配置的边界**：智能体层（`api_key` 等）作用于 MiClaw / 智能体链路；语音层（`voice_api_key` 等）
-  作用于语音对话。如果配完仍无第三方 API 流量，说明你测试的那条链路是**云端（小米服务端）完成**的，
-  本地配置改不到它 —— 此时用智能体/MiClaw 链路测试，或给模块加 HTTP 层抓取来定位。
+  作用于语音对话，两者都已写入并可在落盘文件中核对
+  （`files/datastore/core_settings.preferences_pb` 与 `voice_settings.preferences_pb`）。
+  若日志里既没有 `→ 本地 LLM 调用` 也没有 `[http]`，说明你测试的那条链路是**云端（小米服务端）**
+  完成的，本地配置无法改变它。
 - **提示词的生效范围**：`voice_system_prompt` 作用于语音对话主链路；各 Agent（`assets/agents/*`）
   还有自己的 `prompt.md`，需要配 `prompt_override` 才会被文件覆盖。
 

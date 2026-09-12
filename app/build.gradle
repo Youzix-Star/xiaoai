@@ -10,8 +10,8 @@ android {
         applicationId "com.hook.xiaomi_ai_devopt"
         minSdk 26
         targetSdk 34
-        versionCode 5
-        versionName "1.5"
+        versionCode 6
+        versionName "1.6"
     }
 
     // 显式指定 debug 签名用的 keystore。
