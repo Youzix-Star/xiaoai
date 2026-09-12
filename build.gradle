@@ -1,0 +1,5 @@
+// Top-level build file
+// AGP 8.3.2 需要 Gradle 8.4+（wrapper 已固定为 8.11.1）以及 JDK 17/21
+plugins {
+    id 'com.android.application' version '8.3.2' apply false
+}

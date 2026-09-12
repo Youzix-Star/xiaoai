@@ -1,0 +1,35 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.hook.xiaomi_ai_devopt'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.hook.xiaomi_ai_devopt"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+}
+
+dependencies {
+    // Xposed API - provided by LSPosed at runtime, not packaged into APK
+    // 注意：只依赖 api-82.jar 本体；原来还加了 ':sources' 分类器，
+    // 那是个纯 .java 源码包，放进 compileOnly 没有任何作用，已移除。
+    compileOnly 'de.robv.android.xposed:api:82'
+}

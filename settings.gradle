@@ -1,0 +1,25 @@
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+// 原文件这里写成了 dependencyResolution { ... }，不是合法的 Gradle 配置块，
+// 且完全没有声明依赖仓库，Gradle Sync 会直接失败。
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+        // Xposed API (de.robv.android.xposed:api) 不在 Maven Central，
+        // 官方仓库是 api.xposed.info 的根路径（没有 /repo/ 这一段）
+        maven { url 'https://api.xposed.info/' }
+        // 备用镜像：官方仓库曾经挂过一次，这里做个冗余
+        maven { url 'https://maven.aliyun.com/repository/jcenter' }
+    }
+}
+
+rootProject.name = "xiaomi-ai-devopt-hook"
+include ':app'

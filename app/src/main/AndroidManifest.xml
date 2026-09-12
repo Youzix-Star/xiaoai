@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- package 属性在 AGP 8.0+ 已不再支持，命名空间统一在 app/build.gradle 的 namespace 中声明 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="小爱隐藏功能解锁"
+        android:icon="@mipmap/ic_launcher">
+
+        <!-- Xposed Module 元数据 -->
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="解锁超级小爱开发者选项，强制启用第三方 API 设置入口" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="93" />
+        <!-- 作用域：超级小爱主程序 + 代理启动器 -->
+        <meta-data
+            android:name="xposedscope"
+            android:resource="@array/xposed_scope" />
+
+        <!-- 无 Activity，纯后台 Hook 模块 -->
+    </application>
+</manifest>
