@@ -38,11 +38,22 @@ final class LlmConfig {
     static final String CONF_NAME = "xiaoai_llm.conf";
     private static final Charset UTF8 = Charset.forName("UTF-8");
 
+    /** 模块管理的全部配置键（顺序即配置文件顺序） */
+    static final java.util.List<String> KEYS = java.util.Arrays.asList(
+            "provider", "base_url", "api_key", "model_name",
+            "provider_id", "anthropic_base_url",
+            "system_prompt", "custom_system_prompt", "prompt_override",
+            "floating_button");
+
     private static final Map<String, String> VALUES = new LinkedHashMap<String, String>();
     private static File sDir;
     private static boolean sLoaded;
-    private static boolean sStoreApplied;
-    private static boolean sPromptApplied;
+    /** 面板编辑后需要显式清空的键（例如已改为直接写提示词，就不再走 *_file） */
+    private static final java.util.Set<String> BLANK = new java.util.LinkedHashSet<String>();
+    private static Object sStore;
+    private static ClassLoader sStoreCl;
+    private static Object sPromptStore;
+    private static ClassLoader sPromptCl;
 
     private LlmConfig() {
     }
@@ -66,6 +77,13 @@ final class LlmConfig {
         } catch (Throwable t) {
             XposedBridge.log(TAG + " | [conf] 解析失败: " + t);
         }
+    }
+
+    /** 悬浮窗开关，默认开 */
+    static boolean floatingEnabled() {
+        String v = VALUES.get("floating_button");
+        if (v == null) return true;
+        return !("false".equalsIgnoreCase(v) || "0".equals(v) || "no".equalsIgnoreCase(v));
     }
 
     private static String readFile(File f) throws Exception {
@@ -144,7 +162,11 @@ final class LlmConfig {
                 "custom_system_prompt=\n" +
                 "custom_system_prompt_file=\n" +
                 "# 是否开启「按提示词文件覆盖 Agent 提示词」（prompt_file_override_enabled）\n" +
-                "prompt_override=\n";
+                "prompt_override=\n" +
+                "\n" +
+                "# ===== 悬浮窗 =====\n" +
+                "# 是否显示小爱进程内的配置悬浮窗（默认 true；长按悬浮球也可隐藏）\n" +
+                "floating_button=\n";
         FileOutputStream out = null;
         try {
             out = new FileOutputStream(file);
@@ -168,30 +190,130 @@ final class LlmConfig {
      * setter 都是 Kotlin suspend 函数，签名形如 setApiKey(String, Continuation)，
      * 这里用动态代理造 Continuation（模块不依赖 kotlin 运行时）。
      */
-    static synchronized void applyStore(Object store, ClassLoader cl) {
-        if (sStoreApplied || store == null || VALUES.isEmpty()) return;
-        sStoreApplied = true;
-
-        Object cont = newContinuation(cl);
-        applyString(store, "setLlmProvider", "provider", cont);
-        applyString(store, "setOpenAIBaseUrl", "base_url", cont);
-        applyString(store, "setApiKey", "api_key", cont);
-        applyString(store, "setModelName", "model_name", cont);
-        applyString(store, "setModelProviderId", "provider_id", cont);
-        applyString(store, "setAnthropicBaseUrl", "anthropic_base_url", cont);
-        applyBoolean(store, "setPromptFileOverrideEnabled", "prompt_override", cont);
+    /** 拿到 CoreSettingsDataStore 实例后记住它，并立刻应用一次配置 */
+    static synchronized void rememberStore(Object store, ClassLoader cl) {
+        if (store == null) return;
+        sStore = store;
+        sStoreCl = cl;
+        applyAll();
     }
 
-    // ==================== 写入 VoiceSettingsDataStore（vu.q）====================
+    /** 拿到 VoiceSettingsDataStore 实例后记住它，并立刻应用一次配置 */
+    static synchronized void rememberPromptStore(Object store, ClassLoader cl) {
+        if (store == null) return;
+        sPromptStore = store;
+        sPromptCl = cl;
+        applyAll();
+    }
 
-    /** 系统提示词所在存储 */
-    static synchronized void applyPromptStore(Object store, ClassLoader cl) {
-        if (sPromptApplied || store == null || VALUES.isEmpty()) return;
-        sPromptApplied = true;
-
+    /** 把当前 VALUES 写入两个已拿到的 store；可重复调用（悬浮窗保存后立即生效） */
+    static synchronized void applyAll() {
+        if (VALUES.isEmpty()) return;
+        ClassLoader cl = sStoreCl != null ? sStoreCl : sPromptCl;
         Object cont = newContinuation(cl);
-        applyString(store, "setVoiceSystemPrompt", "system_prompt", cont);
-        applyString(store, "setVoiceCustomSystemPrompt", "custom_system_prompt", cont);
+
+        if (sStore != null) {
+            applyString(sStore, "setLlmProvider", "provider", cont);
+            applyString(sStore, "setOpenAIBaseUrl", "base_url", cont);
+            applyString(sStore, "setApiKey", "api_key", cont);
+            applyString(sStore, "setModelName", "model_name", cont);
+            applyString(sStore, "setModelProviderId", "provider_id", cont);
+            applyString(sStore, "setAnthropicBaseUrl", "anthropic_base_url", cont);
+            applyBoolean(sStore, "setPromptFileOverrideEnabled", "prompt_override", cont);
+        } else {
+            XposedBridge.log(TAG + " | [conf] CoreSettingsDataStore 尚未就绪，配置待写入");
+        }
+
+        if (sPromptStore != null) {
+            applyString(sPromptStore, "setVoiceSystemPrompt", "system_prompt", cont);
+            applyString(sPromptStore, "setVoiceCustomSystemPrompt", "custom_system_prompt", cont);
+        } else if (VALUES.containsKey("system_prompt") || VALUES.containsKey("custom_system_prompt")) {
+            XposedBridge.log(TAG + " | [conf] VoiceSettingsDataStore 尚未就绪，提示词待写入");
+        }
+    }
+
+    /** 供悬浮窗回填表单 */
+    static synchronized Map<String, String> currentValues() {
+        return new LinkedHashMap<String, String>(VALUES);
+    }
+
+    /**
+     * 悬浮窗保存：合并值 → 回写配置文件 → 立即写入两个 store。
+     * 空值表示清除该项。
+     */
+    static synchronized void saveFrom(Context context, Map<String, String> updates) {
+        load(context);
+        for (Map.Entry<String, String> e : updates.entrySet()) {
+            String v = e.getValue();
+            if (v == null || v.trim().isEmpty()) {
+                VALUES.remove(e.getKey());
+            } else {
+                VALUES.put(e.getKey(), v.trim());
+            }
+        }
+        if (nonEmpty("system_prompt")) BLANK.add("system_prompt_file");
+        if (nonEmpty("custom_system_prompt")) BLANK.add("custom_system_prompt_file");
+        persist(context);
+        applyAll();
+    }
+
+    private static boolean nonEmpty(String key) {
+        String v = VALUES.get(key);
+        return v != null && !v.trim().isEmpty();
+    }
+
+    /** 回写配置文件：保留用户的注释与未知行，只替换/追加已知键 */
+    private static void persist(Context context) {
+        File file = new File(context.getFilesDir(), CONF_NAME);
+        java.util.Set<String> pending = new java.util.LinkedHashSet<String>(KEYS);
+        pending.addAll(BLANK);
+        StringBuilder sb = new StringBuilder();
+        try {
+            for (String line : readFile(file).split("\n", -1)) {
+                String trimmed = line.trim();
+                int eq = trimmed.indexOf('=');
+                String key = eq > 0 ? trimmed.substring(0, eq).trim().toLowerCase() : null;
+                if (key != null && pending.contains(key)) {
+                    pending.remove(key);
+                    sb.append(key).append('=')
+                            .append(BLANK.contains(key) ? "" : escaped(VALUES.get(key)))
+                            .append('\n');
+                } else {
+                    sb.append(line).append('\n');
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        for (String key : pending) {
+            if (BLANK.contains(key)) {
+                sb.append(key).append("=\n");
+                continue;
+            }
+            String v = VALUES.get(key);
+            if (v != null) {
+                sb.append(key).append('=').append(escaped(v)).append('\n');
+            }
+        }
+        FileOutputStream out = null;
+        try {
+            out = new FileOutputStream(file);
+            out.write(sb.toString().getBytes(UTF8));
+            out.flush();
+            XposedBridge.log(TAG + " | [conf] 已保存到 " + file.getAbsolutePath());
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " | [conf] 保存失败: " + t);
+        } finally {
+            if (out != null) {
+                try {
+                    out.close();
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+    }
+
+    private static String escaped(String v) {
+        return v == null ? "" : v.replace("\n", "\\n");
     }
 
     // ==================== 通用写入 ====================

@@ -38,7 +38,7 @@ LSPosed 模块。针对 **超级小爱 8.2.10.2222（`com.miui.voiceassist`）**
 | 提示词文件覆盖开关 | `qk.m0.setPromptFileOverrideEnabled`，键 `prompt_file_override_enabled` |
 | Agent 提示词 | `assets/agents/<agent-id>/prompt.md`（对应 `AgentDefinition.promptFile` 字段 `prompt_file`） |
 
-## 模块做了四件事
+## 模块做了五件事
 
 1. **放行小米门禁**：`ca1.a.isEnabled()` → true、`g1.isLogin()` → true，并让 `clear()` 变空操作。
 2. **状态一致**：hook `com.xiaomi.voiceassist.baselibrary.utils.g1.getBoolean()`，对
@@ -49,7 +49,35 @@ LSPosed 模块。针对 **超级小爱 8.2.10.2222（`com.miui.voiceassist`）**
 4. **写入系统提示词**：把配置里的提示词通过 `VoiceSettingsDataStore.setVoiceSystemPrompt()` /
    `setVoiceCustomSystemPrompt()` 写进小爱的提示词存储，并可开启 Agent 提示词文件覆盖。
 
+5. **内置配置悬浮窗**：在小爱进程里挂一个悬浮球，点开即可改上面所有配置，
+   保存后立即生效，**完全不依赖小爱的任何设置入口**。
+
 以上写入都发生在 osbot 两个 DataStore 构造完成时（通过 hook 构造函数拿到实例）。
+
+## 悬浮窗（改配置推荐用这个）
+
+模块会在小爱进程里挂一个圆形悬浮球（显示 `AI`），**不需要进小爱的任何设置页面**：
+
+| 操作 | 效果 |
+|------|------|
+| 拖动 | 移动悬浮球位置 |
+| 点按 | 打开配置面板 |
+| 长按 | 临时隐藏（本次进程内不再显示，重启小爱恢复） |
+
+面板里可以直接改：API 地址、API Key、模型名、provider、provider_id、系统提示词、
+以及「按文件覆盖 Agent 提示词」开关。点 **保存并生效** 后会：
+
+1. 回写 `files/xiaoai_llm.conf`（保留你自己的注释）
+2. **立刻**通过已缓存的 DataStore 实例写进小爱，**不用强制停止/重启**
+
+前置条件：小爱要有悬浮窗权限。本机实测 `com.miui.voiceassist` 的
+`SYSTEM_ALERT_WINDOW` 已是 `allow`（系统应用自带），无需额外授权。
+
+不想要悬浮球就在配置里写：
+
+```ini
+floating_button=false
+```
 
 ## 配置第三方 API
 
@@ -171,6 +199,9 @@ AiDevOpt | ✓ hook com.xiaomi.voiceassistant.g1.isLogin() → true
 AiDevOpt | ✓ hook DevOptionState.getUnlocked() → true
 AiDevOpt | ✓ hook qk.m0 构造（用于写入 LLM 配置）
 AiDevOpt | ✓ hook vu.q 构造（用于写入系统提示词）
+AiDevOpt | ✓ 配置悬浮球已显示（长按可隐藏）
+AiDevOpt | 配置面板已打开
+AiDevOpt | ✓ 悬浮窗保存配置完成
 AiDevOpt | [conf] 已生成配置模板: /data/data/com.miui.voiceassist/files/xiaoai_llm.conf
 AiDevOpt | [conf] 已写入 api_key = sk-1***ab
 AiDevOpt | [conf] 已写入 system_prompt = 你是我的私人助理。回答前先给结论…(48 字符)
@@ -201,6 +232,8 @@ AiDevOpt | ✓ setContentView(2131558469) 执行 —— 页面正常渲染
 - **第三方 LLM 界面本身未解锁**：它属于 osbot 内部页面（`DevOptionsScreen` /
   `LabScreen`），本模块解锁的是它的状态开关（`DevOptionState`）。未在其宿主界面里
   找到稳定入口，因此额外提供配置文件写入的方式，保证参数能真正落到 DataStore。
+- **悬浮窗依赖 App 的悬浮窗权限**：本机小爱已有该权限；若某些 ROM 把它收回，
+  悬浮球会显示失败（日志有 `✗ 悬浮球显示失败`），此时改用 `xiaoai_llm.conf` 手改仍然可用。
 - **只验证到「可编译 + 配置可解析」**：真机行为需要以日志为准，仓库内没有 App 样本。
 - `provider_id` 等可选字段按需填写，留空则不写入；提示词同理，留空即保持 App 原值。
 - **提示词的生效范围**：`voice_system_prompt` 作用于语音对话主链路；各 Agent（`assets/agents/*`）

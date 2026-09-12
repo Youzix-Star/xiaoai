@@ -86,6 +86,11 @@ public class HookEntry implements IXposedHookLoadPackage {
         // 诊断：确认开发者界面的 onCreate / setContentView 是否真的执行了
         hookDevOptionsActivity(lp);
 
+        // 配置悬浮窗：只挂在主进程
+        if (lp.processName == null || lp.processName.equals(lp.packageName)) {
+            hookFloatingPanel(lp);
+        }
+
         XposedBridge.log(TAG + " | ======== Hook 完成 ========");
     }
 
@@ -220,7 +225,7 @@ public class HookEntry implements IXposedHookLoadPackage {
                     if (app != null) {
                         LlmConfig.load(app);
                     }
-                    LlmConfig.applyStore(param.thisObject, clazz.getClassLoader());
+                    LlmConfig.rememberStore(param.thisObject, clazz.getClassLoader());
                 } catch (Throwable t) {
                     XposedBridge.log(TAG + " | [conf] 应用失败: " + t);
                 }
@@ -249,7 +254,7 @@ public class HookEntry implements IXposedHookLoadPackage {
                     if (app != null) {
                         LlmConfig.load(app);
                     }
-                    LlmConfig.applyPromptStore(param.thisObject, clazz.getClassLoader());
+                    LlmConfig.rememberPromptStore(param.thisObject, clazz.getClassLoader());
                 } catch (Throwable t) {
                     XposedBridge.log(TAG + " | [conf] 写入提示词失败: " + t);
                 }
@@ -257,6 +262,37 @@ public class HookEntry implements IXposedHookLoadPackage {
         });
         XposedBridge.log(TAG + " | ✓ hook " + CLS_OSBOT_PROMPT_STORE
                 + " 构造（用于写入系统提示词）");
+    }
+
+    /**
+     * 配置悬浮窗：不依赖小爱任何设置入口。
+     * 在小爱主进程 Application.onCreate 之后挂悬浮球，点开即可改地址/Key/模型/提示词，
+     * 保存后直接写回 DataStore 立即生效。
+     */
+    private void hookFloatingPanel(XC_LoadPackage.LoadPackageParam lp) {
+        try {
+            XposedHelpers.findAndHookMethod("android.app.Application", lp.classLoader,
+                    "onCreate", new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            try {
+                                Application app = (Application) param.thisObject;
+                                LlmConfig.load(app);
+                                if (LlmConfig.floatingEnabled()) {
+                                    FloatingPanel.show(app);
+                                } else {
+                                    XposedBridge.log(TAG
+                                            + " | 悬浮窗已按配置关闭（floating_button=false）");
+                                }
+                            } catch (Throwable t) {
+                                XposedBridge.log(TAG + " | 悬浮窗初始化失败: " + t);
+                            }
+                        }
+                    });
+            XposedBridge.log(TAG + " | ✓ 已注册配置悬浮窗");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " | ✗ 悬浮窗注册失败: " + t);
+        }
     }
 
     // ==================== 诊断 ====================
