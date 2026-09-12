@@ -389,6 +389,16 @@ public class HookEntry implements IXposedHookLoadPackage {
                 }
             });
             Diag.log("✓ hook LLM 配置对象 " + CLS_LLM_CONFIG);
+
+            // App 内部分支会选小米 miclaw 云端地址（实测 base_url=api.miclaw.xiaomi.net,
+            // model=mimo-omni），在出口处强制改回用户配置
+            if (LlmConfig.forceLlm()) {
+                hookConfigGetter(cfg, "getBaseUrl", "base_url");
+                hookConfigGetter(cfg, "getApiKey", "api_key");
+                hookConfigGetter(cfg, "getModel", "model_name");
+            } else {
+                Diag.log("[llm] force_llm=false，不强制改写配置");
+            }
         } else {
             Diag.log("✗ 未找到 " + CLS_LLM_CONFIG + "（LLM 配置对象）");
         }
@@ -423,7 +433,8 @@ public class HookEntry implements IXposedHookLoadPackage {
                     String url = urlOf(param.args);
                     if (url == null) return;
                     if (url.contains("chat/completions") || url.contains("deepseek")
-                            || url.contains("/v1/messages")) {
+                            || url.contains("/v1/messages") || url.contains("/osbot/api/llm")
+                            || url.contains("miclaw")) {
                         Diag.log("[http] " + shorten(url));
                     }
                 }
@@ -431,6 +442,29 @@ public class HookEntry implements IXposedHookLoadPackage {
             Diag.log("✓ 已挂 URL 探针（只记录 LLM 相关地址）");
         } catch (Throwable t) {
             Diag.log("✗ URL 探针注册失败: " + t);
+        }
+    }
+
+    /** 把配置对象上的 getter 强制返回用户配置的值 */
+    private static void hookConfigGetter(Class<?> cfg, final String getter, final String confKey) {
+        try {
+            XposedHelpers.findAndHookMethod(cfg, getter, new XC_MethodHook() {
+                private boolean logged;
+
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    String v = LlmConfig.get(confKey);
+                    if (v == null || v.trim().isEmpty()) return;
+                    param.setResult(v);
+                    if (!logged) {
+                        logged = true;
+                        Diag.log("[llm] 强制 " + getter + "() → "
+                                + (confKey.contains("key") ? maskKey(v) : v));
+                    }
+                }
+            });
+        } catch (Throwable t) {
+            Diag.log("✗ 强制 " + getter + " 失败: " + t);
         }
     }
 

@@ -44,7 +44,7 @@ final class LlmConfig {
             "provider_id", "anthropic_base_url",
             "system_prompt", "custom_system_prompt", "prompt_override",
             "voice_provider", "voice_api_base_url", "voice_api_key", "voice_model_name",
-            "floating_button");
+            "force_llm", "floating_button");
 
     private static final Map<String, String> VALUES = new LinkedHashMap<String, String>();
     private static File sDir;
@@ -171,6 +171,11 @@ final class LlmConfig {
                 "# voice_api_key=\n" +
                 "# voice_model_name=\n" +
                 "\n" +
+                "# ===== 强制使用上面的配置（默认 true）=====\n" +
+                "# App 内置逻辑会把 LLM 调用送去小米 miclaw 云端并覆盖地址/模型，\n" +
+                "# 置 true 会在配置出口处强制改回上面的 base_url / model / api_key\n" +
+                "force_llm=\n" +
+                "\n" +
                 "# ===== 悬浮窗 =====\n" +
                 "# 是否显示小爱进程内的配置悬浮窗（默认 true；长按悬浮球也可隐藏）\n" +
                 "floating_button=\n";
@@ -291,6 +296,18 @@ final class LlmConfig {
         } catch (Throwable t) {
             return null;
         }
+    }
+
+    /** 取单个配置值 */
+    static String get(String key) {
+        return VALUES.get(key);
+    }
+
+    /** 是否强制使用我们配置的 base_url / api_key / model（App 默认会走小米 miclaw 云端） */
+    static boolean forceLlm() {
+        String v = VALUES.get("force_llm");
+        if (v == null) return true;
+        return !("false".equalsIgnoreCase(v) || "0".equals(v) || "no".equalsIgnoreCase(v));
     }
 
     /** 供悬浮窗回填表单 */

@@ -299,7 +299,8 @@ AiDevOpt | ✓ setContentView(2131558469) 执行 —— 页面正常渲染
 | `[llm] 生效配置 …` | App 真正下发下去的 LLM 配置（`tm.a` 构建时打印），这里若还是小米地址，说明配置没被读 |
 | `[llm] 生效系统提示词:` | 提示词有没有进到配置对象里 |
 | `→ 本地 LLM 调用` | 这条链路**确实发起了本地 LLM 调用**；如果对话后完全没有这行，说明该链路是**云端（小米服务端）**完成的 |
-| `[http] …` | 实际访问的地址，出现 deepseek 才算真的走了第三方 API |
+| `[llm] 强制 getBaseUrl() → …` | 模块把配置出口改写成了你的值 |
+| `[http] …` | 实际访问的地址。出现 `deepseek` 才算真的走了第三方 API；出现 `miclaw` 说明还有调用在走小米云端 |
 
 ## 修复记录
 
@@ -319,6 +320,7 @@ AiDevOpt | ✓ setContentView(2131558469) 执行 —— 页面正常渲染
 | 12 | CI 每次产物签名都不同，升级安装会签名冲突（AGP 用的 keystore 并不在 `~/.android/debug.keystore`，缓存那个文件没用） | `app/build.gradle` 显式指定 debug 签名用 `$HOME/.android/debug.keystore`（可用环境变量 `XIAOAI_DEBUG_KEYSTORE` 覆盖），CI 再缓存该文件，并打印签名指纹 |
 | 14 | 悬浮球在小爱退到后台后仍浮在桌面上 | 用 `ActivityLifecycleCallbacks` 跟踪前后台，只在小爱处于前台时显示 |
 | 15 | 配完不生效却无从判断卡在哪一步 | 新增三个探针：`tm.a` 生效配置、`generateText` 本地调用入口、`java.net.URL` 层地址（只记 LLM 相关） |
+| 16 | **配置写入完全正确，但 App 内部把 LLM 调用改道到小米云端**：`SettingsRepositoryImpl` 里是 `useMify ? getMifyLlmBaseUrl() : 配置地址`，实测选中了前者 → `base_url=api.miclaw.xiaomi.net/osbot/api/llm/v2`、`model=mimo-omni`、`api_key` 为空 | 在 LLM 配置对象（`tm.a`）的三个出口 `getBaseUrl` / `getApiKey` / `getModel` 上强制返回用户配置，配置项 `force_llm`（默认 true）可关 |
 | 13 | **只写了智能体层的 `api_key` 那套键**，漏了语音层的 `voice_api_key` / `voice_api_base_url` / `voice_model_name` / `voice_provider`，导致语音对话完全不生效（配置有落盘，但没被语音链路读取） | 同一组值同时写入两层，语音层支持 `voice_*` 覆盖，并加回读校验日志 |
 
 ## 已知限制
@@ -332,6 +334,9 @@ AiDevOpt | ✓ setContentView(2131558469) 执行 —— 页面正常渲染
   悬浮球会显示失败（日志有 `✗ 悬浮球显示失败`），此时改用 `xiaoai_llm.conf` 手改仍然可用。
 - **只验证到「可编译 + 配置可解析」**：真机行为需要以日志为准，仓库内没有 App 样本。
 - `provider_id` 等可选字段按需填写，留空则不写入；提示词同理，留空即保持 App 原值。
+- **`force_llm` 的影响面**：开启后**所有**本地 LLM 调用（包括记忆提取之类的内部子调用）都会被指向你配置的地址与模型。
+  那些内部调用原本用的是小米专有模型（如 `mimo-omni`，可能是多模态），换成纯文本模型后相关能力可能失效或报错；
+  不想要这种全局改写就设 `force_llm=false`。
 - **两层配置的边界**：智能体层（`api_key` 等）作用于 MiClaw / 智能体链路；语音层（`voice_api_key` 等）
   作用于语音对话，两者都已写入并可在落盘文件中核对
   （`files/datastore/core_settings.preferences_pb` 与 `voice_settings.preferences_pb`）。

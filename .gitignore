@@ -11,3 +11,5 @@
 *.apk
 *.apks
 *.xapk
+AiDevOpt.log
+*.log
