@@ -33,7 +33,8 @@ LSPosed 模块。针对 **超级小爱 8.2.10.2222（`com.miui.voiceassist`）**
 | 设置 ViewModel | `com.aios.osbot.ui.settings.eg`（`getDevOptionState()`） |
 | LLM 设置界面 | `com.aios.osbot.store.debug.DevOptionsScreen`（Compose） |
 | 实验室界面 | `com.aios.osbot.ui.settings.LabScreen` |
-| 配置存储 | `qk.m0` = `CoreSettingsDataStore`：`llm_provider` / `api_key` / `model_name` / `openai_base_url` / `temperature` / `anthropic_base_url` |
+| 配置存储（智能体层） | `qk.m0` = `CoreSettingsDataStore`：`llm_provider` / `api_key` / `model_name` / `openai_base_url` / `temperature` / `anthropic_base_url` |
+| **配置存储（语音层）** | `vu.q` = `VoiceSettingsDataStore`：`voice_provider` / `voice_api_base_url` / `voice_api_key` / `voice_model_name` —— **语音对话用的是这一套，不是上面那套** |
 | **系统提示词存储** | `vu.q` = `VoiceSettingsDataStore`：`voice_system_prompt` / `voice_custom_system_prompt`（`setVoiceSystemPrompt` / `setVoiceCustomSystemPrompt`，同为 suspend setter） |
 | 提示词文件覆盖开关 | `qk.m0.setPromptFileOverrideEnabled`，键 `prompt_file_override_enabled` |
 | Agent 提示词 | `assets/agents/<agent-id>/prompt.md`（对应 `AgentDefinition.promptFile` 字段 `prompt_file`） |
@@ -112,6 +113,40 @@ provider=openai
 base_url=https://api.deepseek.com/v1
 api_key=sk-你的密钥
 model_name=deepseek-chat
+```
+
+### 两层配置（重要）
+
+小爱有两套并行的 LLM 配置，**只写一套是不生效的**：
+
+| 层 | 存储 | 键 | 谁在用 |
+|----|------|----|--------|
+| 智能体层 | `CoreSettingsDataStore` | `api_key` / `openai_base_url` / `model_name` / `llm_provider` | MiClaw / 智能体链路（`com.aios.osbot.memory.claw...LlmService`） |
+| 语音层 | `VoiceSettingsDataStore` | `voice_api_key` / `voice_api_base_url` / `voice_model_name` / `voice_provider` | 语音对话链路 |
+
+模块保存时会**把同一组值写进两层**（语音层可用 `voice_*` 键单独覆盖）：
+
+```ini
+# 通用值 → 同时写两层
+provider=openai
+base_url=https://api.deepseek.com
+api_key=sk-xxx
+model_name=deepseek-chat
+
+# 可选：只覆盖语音层
+# voice_provider=
+# voice_api_base_url=
+# voice_api_key=
+# voice_model_name=
+```
+
+每次写入后模块会**回读校验**，日志里能看到两层各自的实际值：
+
+```
+[conf] 已写入 setVoiceApiKey ← api_key = sk-f***f0
+[conf] 回读 语音层 provider = openai
+[conf] 回读 语音层 base_url = https://api.deepseek.com
+[conf] 回读 智能体层 model_name = deepseek-chat
 ```
 
 写入动作通过 Kotlin suspend setter 完成（模块用动态代理构造 `Continuation`，
@@ -259,6 +294,7 @@ AiDevOpt | ✓ setContentView(2131558469) 执行 —— 页面正常渲染
 | 10 | `findAndHookMethod(clazz, "setContentView", ...)` 对子类做 **exact 查找**，而该方法继承自 `Activity` → 抛 `NoSuchMethodError` 并**冲出 `handleLoadPackage`**，导致后面所有 hook（含悬浮窗）全部没注册 | 改为 hook `Activity.setContentView` 再按实例类型过滤；并给每个 hook 步骤加独立 try/catch，一步失败不再拖垮整串 |
 | 11 | `Diag.init()` 之前的日志只进内存和 logcat，日志文件里缺了最关键的 hook 结果行 | `init()` 时把已缓冲的日志补写进文件 |
 | 12 | CI 每次重新生成 debug keystore，产物签名每次都不同，升级安装会签名冲突 | 工作流固定并缓存 `~/.android/debug.keystore`，并打印签名指纹 |
+| 13 | **只写了智能体层的 `api_key` 那套键**，漏了语音层的 `voice_api_key` / `voice_api_base_url` / `voice_model_name` / `voice_provider`，导致语音对话完全不生效（配置有落盘，但没被语音链路读取） | 同一组值同时写入两层，语音层支持 `voice_*` 覆盖，并加回读校验日志 |
 
 ## 已知限制
 
@@ -271,6 +307,9 @@ AiDevOpt | ✓ setContentView(2131558469) 执行 —— 页面正常渲染
   悬浮球会显示失败（日志有 `✗ 悬浮球显示失败`），此时改用 `xiaoai_llm.conf` 手改仍然可用。
 - **只验证到「可编译 + 配置可解析」**：真机行为需要以日志为准，仓库内没有 App 样本。
 - `provider_id` 等可选字段按需填写，留空则不写入；提示词同理，留空即保持 App 原值。
+- **两层配置的边界**：智能体层（`api_key` 等）作用于 MiClaw / 智能体链路；语音层（`voice_api_key` 等）
+  作用于语音对话。如果配完仍无第三方 API 流量，说明你测试的那条链路是**云端（小米服务端）完成**的，
+  本地配置改不到它 —— 此时用智能体/MiClaw 链路测试，或给模块加 HTTP 层抓取来定位。
 - **提示词的生效范围**：`voice_system_prompt` 作用于语音对话主链路；各 Agent（`assets/agents/*`）
   还有自己的 `prompt.md`，需要配 `prompt_override` 才会被文件覆盖。
 

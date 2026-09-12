@@ -239,7 +239,8 @@ final class FloatingPanel {
             }), weightLp(ctx));
 
             TextView hint = new TextView(ctx);
-            hint.setText("保存后立即生效，无需重启小爱。配置文件：files/" + LlmConfig.CONF_NAME);
+            hint.setText("保存后写入智能体层 + 语音层并立即生效。配置文件：files/"
+                    + LlmConfig.CONF_NAME);
             hint.setTextColor(TEXT_DIM);
             hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
             LinearLayout.LayoutParams hintLp = new LinearLayout.LayoutParams(

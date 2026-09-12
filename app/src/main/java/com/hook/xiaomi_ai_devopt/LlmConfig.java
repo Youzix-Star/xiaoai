@@ -43,6 +43,7 @@ final class LlmConfig {
             "provider", "base_url", "api_key", "model_name",
             "provider_id", "anthropic_base_url",
             "system_prompt", "custom_system_prompt", "prompt_override",
+            "voice_provider", "voice_api_base_url", "voice_api_key", "voice_model_name",
             "floating_button");
 
     private static final Map<String, String> VALUES = new LinkedHashMap<String, String>();
@@ -164,6 +165,12 @@ final class LlmConfig {
                 "# 是否开启「按提示词文件覆盖 Agent 提示词」（prompt_file_override_enabled）\n" +
                 "prompt_override=\n" +
                 "\n" +
+                "# ===== 语音层（不填则沿用上面的通用值；只影响 voice_* 那一套键）=====\n" +
+                "# voice_provider=\n" +
+                "# voice_api_base_url=\n" +
+                "# voice_api_key=\n" +
+                "# voice_model_name=\n" +
+                "\n" +
                 "# ===== 悬浮窗 =====\n" +
                 "# 是否显示小爱进程内的配置悬浮窗（默认 true；长按悬浮球也可隐藏）\n" +
                 "floating_button=\n";
@@ -227,8 +234,62 @@ final class LlmConfig {
         if (sPromptStore != null) {
             applyString(sPromptStore, "setVoiceSystemPrompt", "system_prompt", cont);
             applyString(sPromptStore, "setVoiceCustomSystemPrompt", "custom_system_prompt", cont);
+            // 语音链路是另一套键：voice_provider / voice_api_base_url / voice_api_key / voice_model_name
+            // 只写 api_key 那套（智能体层）不会影响语音对话
+            applyFrom(sPromptStore, "setVoiceProvider", "voice_provider", "provider", cont);
+            applyFrom(sPromptStore, "setVoiceApiBaseUrl", "voice_api_base_url", "base_url", cont);
+            applyFrom(sPromptStore, "setVoiceApiKey", "voice_api_key", "api_key", cont);
+            applyFrom(sPromptStore, "setVoiceModelName", "voice_model_name", "model_name", cont);
         } else if (VALUES.containsKey("system_prompt") || VALUES.containsKey("custom_system_prompt")) {
             Diag.log("[conf] VoiceSettingsDataStore 尚未就绪，提示词待写入");
+        }
+
+        // 回读校验：确认值真的进了 DataStore（而不是只调用了 setter）
+        if (sStore != null) {
+            readBack(sStore, "智能体层", "getLlmProvider", "provider");
+            readBack(sStore, "智能体层", "getOpenaiBaseUrl", "base_url");
+            readBack(sStore, "智能体层", "getModelName", "model_name");
+            readBack(sStore, "智能体层", "getApiKey", "api_key");
+        }
+        if (sPromptStore != null) {
+            readBack(sPromptStore, "语音层", "getVoiceProvider", "provider");
+            readBack(sPromptStore, "语音层", "getVoiceApiBaseUrl", "base_url");
+            readBack(sPromptStore, "语音层", "getVoiceModelName", "model_name");
+            readBack(sPromptStore, "语音层", "getVoiceApiKey", "api_key");
+            readBack(sPromptStore, "语音层", "getVoiceSystemPrompt", "system_prompt");
+        }
+    }
+
+    /** 调 getter 回读当前值（getter 返回的是 StateFlow，取它的 getValue()） */
+    private static void readBack(Object store, String label, String getter, String field) {
+        try {
+            Method g = null;
+            for (Method m : store.getClass().getMethods()) {
+                if (m.getName().equals(getter) && m.getParameterCount() == 0) {
+                    g = m;
+                    break;
+                }
+            }
+            if (g == null) return;
+            Object value = unwrap(g.invoke(store));
+            if (value == null) return;
+            String text = String.valueOf(value);
+            if (field.contains("key")) text = mask(text);
+            if (field.equals("system_prompt") && text.length() > 30) {
+                text = text.substring(0, 30) + "…(" + text.length() + " 字符)";
+            }
+            Diag.log("[conf] 回读 " + label + " " + field + " = " + text);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static Object unwrap(Object v) {
+        if (v == null) return null;
+        if (v instanceof String || v instanceof Boolean || v instanceof Number) return v;
+        try {
+            return v.getClass().getMethod("getValue").invoke(v);
+        } catch (Throwable t) {
+            return null;
         }
     }
 
@@ -336,6 +397,34 @@ final class LlmConfig {
             Diag.log("[conf] 已写入 " + key + " = " + shown);
         } catch (Throwable t) {
             Diag.log("[conf] 写入 " + key + " 失败: " + cause(t));
+        }
+    }
+
+    /**
+     * 专用键优先、否则回退通用键。用于「同一套配置写进两个层」的场景：
+     * 通用 api_key/base_url/... → 智能体层；voice_api_key/... → 语音层。
+     */
+    private static void applyFrom(Object store, String setter,
+                                  String specificKey, String genericKey, Object cont) {
+        String value = VALUES.get(specificKey);
+        String used = specificKey;
+        if (value == null || value.trim().isEmpty()) {
+            value = VALUES.get(genericKey);
+            used = genericKey;
+        }
+        if (value == null || value.trim().isEmpty()) return;
+        try {
+            Method target = findSetter(store, setter, String.class);
+            if (target == null) {
+                Diag.log("[conf] 未找到 setter: " + setter);
+                return;
+            }
+            target.invoke(store, value, cont);
+            String shown = used.contains("key") ? mask(value)
+                    : (value.length() > 40 ? value.substring(0, 40) + "…(" + value.length() + " 字符)" : value);
+            Diag.log("[conf] 已写入 " + setter + " ← " + used + " = " + shown);
+        } catch (Throwable t) {
+            Diag.log("[conf] 写入 " + specificKey + " 失败: " + cause(t));
         }
     }
 
