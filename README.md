@@ -301,7 +301,8 @@ AiDevOpt | ✓ setContentView(2131558469) 执行 —— 页面正常渲染
 | `[llm] 生效系统提示词:` | 提示词有没有进到配置对象里 |
 | `→ 本地 LLM 调用` | 这条链路**确实发起了本地 LLM 调用**；如果对话后完全没有这行，说明该链路是**云端（小米服务端）**完成的 |
 | `[llm] 强制 getBaseUrl() → …` | 模块把配置出口改写成了你的值 |
-| `[http] …` | 实际访问的地址。出现 `deepseek` 才算真的走了第三方 API；出现 `miclaw` 说明还有调用在走小米云端 |
+| `[http] …` | `java.net.URL` 层的地址（OkHttp 引擎不会出现，要用下面的 `[net]`） |
+| `[net] …` | **Ktor 引擎层的真实请求地址**（`AndroidClientEngine` / `OkHttpEngine`），这里出现 `deepseek` 才算真的走了第三方 API |
 
 ## 先分清两种「不生效」
 

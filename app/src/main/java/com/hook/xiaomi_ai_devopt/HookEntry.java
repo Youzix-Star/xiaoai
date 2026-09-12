@@ -426,6 +426,8 @@ public class HookEntry implements IXposedHookLoadPackage {
             Diag.log("✗ 未找到 " + CLS_LLM_SERVICE + "（LLM 调用服务）");
         }
 
+        probeKtorEngines(lp);
+
         try {
             XposedBridge.hookAllConstructors(java.net.URL.class, new XC_MethodHook() {
                 @Override
@@ -442,6 +444,51 @@ public class HookEntry implements IXposedHookLoadPackage {
             Diag.log("✓ 已挂 URL 探针（只记录 LLM 相关地址）");
         } catch (Throwable t) {
             Diag.log("✗ URL 探针注册失败: " + t);
+        }
+    }
+
+    /**
+     * Ktor 引擎层探针：OkHttp 引擎不会构造 java.net.URL，只挂 URL 类会漏掉它，
+     * 因此直接挂在引擎的 execute 上，从 HttpRequestData 取真实 URL。
+     */
+    private void probeKtorEngines(XC_LoadPackage.LoadPackageParam lp) {
+        String[] engines = {
+                "io.ktor.client.engine.android.AndroidClientEngine",
+                "io.ktor.client.engine.okhttp.OkHttpEngine",
+        };
+        String[] methods = {"execute", "executeHttpRequest"};
+        for (String engine : engines) {
+            Class<?> clazz = findClassOrNull(engine, lp.classLoader);
+            if (clazz == null) continue;
+            for (String method : methods) {
+                try {
+                    XposedBridge.hookAllMethods(clazz, method, new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            if (param.args == null || param.args.length == 0) return;
+                            String url = requestUrl(param.args[0]);
+                            if (url == null) return;
+                            if (url.contains("deepseek") || url.contains("chat/completions")
+                                    || url.contains("miclaw") || url.contains("/llm/")) {
+                                Diag.log("[net] " + shorten(url));
+                            }
+                        }
+                    });
+                    Diag.log("✓ 已挂 Ktor 引擎探针 " + engine + "#" + method);
+                } catch (Throwable ignored) {
+                    // 该方法在此引擎里不存在，跳过
+                }
+            }
+        }
+    }
+
+    /** 从 HttpRequestData 取 url */
+    private static String requestUrl(Object requestData) {
+        try {
+            Object url = requestData.getClass().getMethod("getUrl").invoke(requestData);
+            return url == null ? null : url.toString();
+        } catch (Throwable t) {
+            return null;
         }
     }
 
