@@ -10,11 +10,27 @@ android {
         applicationId "com.hook.xiaomi_ai_devopt"
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode 5
+        versionName "1.5"
+    }
+
+    // 显式指定 debug 签名用的 keystore。
+    // 不指定的话 AGP 会在自己的位置找/生成 debug.keystore —— CI 上那个位置每次都是新的，
+    // 于是每次产物签名都不同，装新版必须先卸载旧的。
+    signingConfigs {
+        debug {
+            storeFile file(System.getenv("XIAOAI_DEBUG_KEYSTORE")
+                    ?: "${System.getProperty("user.home")}/.android/debug.keystore")
+            storePassword "android"
+            keyAlias "androiddebugkey"
+            keyPassword "android"
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
@@ -29,7 +45,5 @@ android {
 
 dependencies {
     // Xposed API - provided by LSPosed at runtime, not packaged into APK
-    // 注意：只依赖 api-82.jar 本体；原来还加了 ':sources' 分类器，
-    // 那是个纯 .java 源码包，放进 compileOnly 没有任何作用，已移除。
     compileOnly 'de.robv.android.xposed:api:82'
 }

@@ -197,6 +197,7 @@ prompt_override=true
 | JDK | 17 或 21 |
 | Gradle | 8.11.1（已带 wrapper） |
 | AGP | 8.3.2（Android Studio Iguana / 2023.2.1 以上） |
+| 签名 | debug 构建使用 `$HOME/.android/debug.keystore`（Android Studio 会自动生成；缺失时构建会明确报错） |
 | Android SDK | Platform 34 + Build-Tools |
 
 ```bash
@@ -293,7 +294,7 @@ AiDevOpt | ✓ setContentView(2131558469) 执行 —— 页面正常渲染
 | 9 | 缺少 CI | 新增 GitHub Actions，构建并上传 debug APK |
 | 10 | `findAndHookMethod(clazz, "setContentView", ...)` 对子类做 **exact 查找**，而该方法继承自 `Activity` → 抛 `NoSuchMethodError` 并**冲出 `handleLoadPackage`**，导致后面所有 hook（含悬浮窗）全部没注册 | 改为 hook `Activity.setContentView` 再按实例类型过滤；并给每个 hook 步骤加独立 try/catch，一步失败不再拖垮整串 |
 | 11 | `Diag.init()` 之前的日志只进内存和 logcat，日志文件里缺了最关键的 hook 结果行 | `init()` 时把已缓冲的日志补写进文件 |
-| 12 | CI 每次重新生成 debug keystore，产物签名每次都不同，升级安装会签名冲突 | 工作流固定并缓存 `~/.android/debug.keystore`，并打印签名指纹 |
+| 12 | CI 每次产物签名都不同，升级安装会签名冲突（AGP 用的 keystore 并不在 `~/.android/debug.keystore`，缓存那个文件没用） | `app/build.gradle` 显式指定 debug 签名用 `$HOME/.android/debug.keystore`（可用环境变量 `XIAOAI_DEBUG_KEYSTORE` 覆盖），CI 再缓存该文件，并打印签名指纹 |
 | 13 | **只写了智能体层的 `api_key` 那套键**，漏了语音层的 `voice_api_key` / `voice_api_base_url` / `voice_model_name` / `voice_provider`，导致语音对话完全不生效（配置有落盘，但没被语音链路读取） | 同一组值同时写入两层，语音层支持 `voice_*` 覆盖，并加回读校验日志 |
 
 ## 已知限制
