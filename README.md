@@ -256,6 +256,9 @@ AiDevOpt | ✓ setContentView(2131558469) 执行 —— 页面正常渲染
 | 7 | 门禁类名沿用老版本（`ca1.a` 静态方法、`com.xiaomi.voiceassistant.g1` 存疑） | 按 8.2.10.2222 实测结果重写，并补上 osbot 层 |
 | 8 | 仓库缺少 Gradle wrapper，README 却让人跑 `./gradlew` | 补齐 wrapper（8.11.1） |
 | 9 | 缺少 CI | 新增 GitHub Actions，构建并上传 debug APK |
+| 10 | `findAndHookMethod(clazz, "setContentView", ...)` 对子类做 **exact 查找**，而该方法继承自 `Activity` → 抛 `NoSuchMethodError` 并**冲出 `handleLoadPackage`**，导致后面所有 hook（含悬浮窗）全部没注册 | 改为 hook `Activity.setContentView` 再按实例类型过滤；并给每个 hook 步骤加独立 try/catch，一步失败不再拖垮整串 |
+| 11 | `Diag.init()` 之前的日志只进内存和 logcat，日志文件里缺了最关键的 hook 结果行 | `init()` 时把已缓冲的日志补写进文件 |
+| 12 | CI 每次重新生成 debug keystore，产物签名每次都不同，升级安装会签名冲突 | 工作流固定并缓存 `~/.android/debug.keystore`，并打印签名指纹 |
 
 ## 已知限制
 

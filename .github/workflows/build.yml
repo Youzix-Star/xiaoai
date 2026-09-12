@@ -29,6 +29,24 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Restore stable debug keystore
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: android-debug-keystore-v1
+
+      - name: Create debug keystore if missing
+        run: |
+          # 固定 keystore：否则每次构建签名都不同，装新版必须先卸载旧的
+          if [ ! -f ~/.android/debug.keystore ]; then
+            mkdir -p ~/.android
+            keytool -genkeypair -v -keystore ~/.android/debug.keystore \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          keytool -list -keystore ~/.android/debug.keystore -storepass android | tail -3
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -55,6 +73,11 @@ jobs:
           fi
           echo "path=$APK" >> "$GITHUB_OUTPUT"
           ls -lh "$APK"
+
+      - name: Show APK signer
+        run: |
+          APK=$(find app/build/outputs/apk/debug -name '*.apk' | head -1)
+          "$ANDROID_HOME"/build-tools/34.0.0/apksigner verify --print-certs "$APK" | head -4 || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

@@ -35,8 +35,24 @@ final class Diag {
 
     static void init(Context ctx) {
         try {
-            if (sFile == null && ctx != null) {
-                sFile = new File(ctx.getFilesDir(), LOG_NAME);
+            if (sFile != null || ctx == null) return;
+            sFile = new File(ctx.getFilesDir(), LOG_NAME);
+            // 补写此前只进了内存缓冲的日志（早期 hook 结果否则不会出现在文件里）
+            StringBuilder sb = new StringBuilder("---- 以下是本次启动已产生的日志 ----\n");
+            synchronized (BUFFER) {
+                for (String line : BUFFER) {
+                    sb.append(line).append('\n');
+                }
+            }
+            FileOutputStream out = new FileOutputStream(sFile, true);
+            try {
+                out.write(sb.toString().getBytes("UTF-8"));
+                out.flush();
+            } finally {
+                try {
+                    out.close();
+                } catch (Throwable ignored) {
+                }
             }
         } catch (Throwable ignored) {
         }

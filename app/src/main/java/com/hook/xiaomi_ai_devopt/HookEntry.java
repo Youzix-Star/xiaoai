@@ -67,29 +67,91 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static final XC_MethodReplacement RETURN_TRUE =
             XC_MethodReplacement.returnConstant(Boolean.TRUE);
 
+    /** 已解析到的开发者选项 Activity，供 setContentView 诊断判断类型 */
+    private static volatile Class<?> sDevOptionsActivity;
+
+    /** 单个 Hook 步骤 */
+    private interface Step {
+        void run();
+    }
+
+    /** 包一层异常兜底，保证一步失败不影响后续注册 */
+    private static void step(String name, Step body) {
+        try {
+            body.run();
+        } catch (Throwable t) {
+            Diag.log("✗ 步骤[" + name + "]异常（后续继续）: " + t);
+        }
+    }
+
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lp) {
         if (!TARGET_PKG.equals(lp.packageName)) return;
 
         Diag.log("======== 注入 " + lp.packageName + " ========");
 
+        // 每一步都单独兜底：任何一个 Hook 抛异常都不能影响后面的注册
+        // （早期版本就是 setContentView 那次 exact 查找抛错，把后面的悬浮窗一起带走了）
+
         // ---- A. 小米开发者选项门禁 ----
-        hookDevSwitch(lp);
-        hookLoginGate(lp);
-        hookPrefsReader(lp);
+        step("开发者开关", new Step() {
+            @Override
+            public void run() {
+                hookDevSwitch(lp);
+            }
+        });
+        step("登录门禁", new Step() {
+            @Override
+            public void run() {
+                hookLoginGate(lp);
+            }
+        });
+        step("prefs 读取", new Step() {
+            @Override
+            public void run() {
+                hookPrefsReader(lp);
+            }
+        });
 
         // ---- B. osbot（MiClaw / 智能体）开发者状态 + 第三方 API 配置 ----
-        hookOsbotDevState(lp);
-        hookOsbotSettingsStore(lp);
-        hookOsbotPromptStore(lp);
+        step("osbot 开发者状态", new Step() {
+            @Override
+            public void run() {
+                hookOsbotDevState(lp);
+            }
+        });
+        step("osbot 设置存储", new Step() {
+            @Override
+            public void run() {
+                hookOsbotSettingsStore(lp);
+            }
+        });
+        step("osbot 提示词存储", new Step() {
+            @Override
+            public void run() {
+                hookOsbotPromptStore(lp);
+            }
+        });
+
+        // 配置悬浮窗：只挂在主进程（UI 在这里）
+        if (lp.processName == null || lp.processName.equals(lp.packageName)) {
+            step("配置悬浮窗", new Step() {
+                @Override
+                public void run() {
+                    hookFloatingPanel(lp);
+                }
+            });
+        } else {
+            Diag.log("子进程 " + lp.processName + " 不挂悬浮窗");
+        }
 
         // 诊断：确认开发者界面的 onCreate / setContentView 是否真的执行了
-        hookDevOptionsActivity(lp);
-
-        // 配置悬浮窗：只挂在主进程
-        if (lp.processName == null || lp.processName.equals(lp.packageName)) {
-            hookFloatingPanel(lp);
-        }
+        step("开发者界面诊断", new Step() {
+            @Override
+            public void run() {
+                hookDevOptionsActivity(lp);
+            }
+        });
 
         Diag.log("======== Hook 完成 ========");
     }
@@ -311,12 +373,25 @@ public class HookEntry implements IXposedHookLoadPackage {
                 Diag.log("→ DeveloperOptionsActivity.onCreate 进入（门禁已被放行）");
             }
         });
-        XposedHelpers.findAndHookMethod(clazz, "setContentView", int.class, new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam param) {
-                Diag.log("✓ setContentView(" + param.args[0] + ") 执行 —— 页面正常渲染");
-            }
-        });
+        sDevOptionsActivity = clazz;
+
+        // 注意：setContentView(int) 声明在 android.app.Activity 上，
+        // 对子类做 findAndHookMethod 是 exact 查找，会抛 NoSuchMethodError。
+        // 所以改为 hook Activity 上的方法，再按实例类型过滤。
+        try {
+            XposedHelpers.findAndHookMethod(android.app.Activity.class, "setContentView",
+                    int.class, new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            Class<?> dev = sDevOptionsActivity;
+                            if (dev == null || !dev.isInstance(param.thisObject)) return;
+                            Diag.log("✓ setContentView(" + param.args[0]
+                                    + ") 执行 —— 页面正常渲染");
+                        }
+                    });
+        } catch (Throwable t) {
+            Diag.log("✗ setContentView 诊断 hook 失败: " + t);
+        }
     }
 
     // ==================== 工具 ====================
